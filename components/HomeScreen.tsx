@@ -1,7 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, MutableRefObject, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react';
+import type {
+  CSSProperties,
+  MutableRefObject,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  RefObject,
+  WheelEvent as ReactWheelEvent
+} from 'react';
 import { useRouter } from 'next/navigation';
 import QRCode from 'qrcode';
 import {
@@ -91,6 +98,14 @@ type RoomNavigation = 'push' | 'replace' | 'none';
 type PlayerTargetPrompt = {
   action: GameCard;
   targetKeys: string[];
+};
+type StreetSwapPrompt = {
+  action: GameCard;
+  actor: string;
+  rivalKeys: string[];
+  ownKeys: string[];
+  selectedRivalKey?: string;
+  selectedOwnKey?: string;
 };
 type RentTargetPrompt = {
   action: GameCard;
@@ -636,6 +651,10 @@ function getLoosePropertyTargets(cards: TableCard[], owner: string) {
     .flatMap((candidateOwner) => getLoosePropertiesForOwner(cards, candidateOwner));
 }
 
+function getTableCardKey(item: TableCard) {
+  return `${item.owner}:${item.card.id}`;
+}
+
 function getPaymentKey(item: TableCard) {
   return `${item.owner}:${item.card.id}`;
 }
@@ -699,11 +718,13 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
   const [roomsCollapsed, setRoomsCollapsed] = useState(true);
   const [handCollapsed, setHandCollapsed] = useState(false);
   const [handSummaryCollapsed, setHandSummaryCollapsed] = useState({ board: false, bank: false });
+  const [handCanScroll, setHandCanScroll] = useState(false);
   const [playerPanelWidth, setPlayerPanelWidth] = useState(380);
   const [boardHeight, setBoardHeight] = useState(530);
   const [handPanelHeight, setHandPanelHeight] = useState(360);
   const handAutoOpenedRef = useRef(false);
   const [playerTargetPrompt, setPlayerTargetPrompt] = useState<PlayerTargetPrompt | null>(null);
+  const [streetSwapPrompt, setStreetSwapPrompt] = useState<StreetSwapPrompt | null>(null);
   const [rentTargetPrompt, setRentTargetPrompt] = useState<RentTargetPrompt | null>(null);
   const [setTargetPrompt, setSetTargetPrompt] = useState<SetTargetPrompt | null>(null);
   const [incomingActionPrompt, setIncomingActionPrompt] = useState<IncomingActionPrompt | null>(null);
@@ -713,6 +734,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
   const [paymentPrompt, setPaymentPrompt] = useState<PaymentPrompt | null>(null);
   const [discardPrompt, setDiscardPrompt] = useState<DiscardPrompt | null>(null);
   const [rulesGuideOpen, setRulesGuideOpen] = useState(false);
+  const [cardGuideOpen, setCardGuideOpen] = useState(false);
   const [confirmDiscardSettingsOpen, setConfirmDiscardSettingsOpen] = useState(false);
   const incomingActionResolveRef = useRef<((blocked: boolean) => void) | null>(null);
   const paymentContinueRef = useRef<(() => void) | null>(null);
@@ -837,6 +859,13 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
     });
   }, []);
 
+  const scrollPageFromFelt = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    if (event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+
+    event.preventDefault();
+    window.scrollBy({ top: event.deltaY, behavior: 'auto' });
+  }, []);
+
   useEffect(() => {
     setClientId(getOrCreateClientId());
     const localHostnames = ['localhost', '127.0.0.1', '::1'];
@@ -863,6 +892,33 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
   useEffect(() => {
     setBots((current) => Math.min(current, maxBotsForPlayers));
   }, [maxBotsForPlayers]);
+
+  useEffect(() => {
+    const scrollNode = handTargetRef.current;
+    if (!scrollNode || handCollapsed) {
+      setHandCanScroll(false);
+      return;
+    }
+
+    const updateCanScroll = () => {
+      setHandCanScroll(scrollNode.scrollWidth > scrollNode.clientWidth + 4);
+    };
+
+    updateCanScroll();
+
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updateCanScroll);
+      observer.observe(scrollNode);
+    }
+
+    window.addEventListener('resize', updateCanScroll);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updateCanScroll);
+    };
+  }, [hand.length, handCollapsed, handPanelHeight]);
 
   useEffect(() => {
     if (!clientId || !sharedRoom || sharedRoom.status !== 'playing') return;
@@ -1654,6 +1710,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
     setWinner(null);
     setDefendedOwners([]);
     setPlayerTargetPrompt(null);
+    setStreetSwapPrompt(null);
     setSetTargetPrompt(null);
     setWildcardPrompt(null);
     setUpgradePrompt(null);
@@ -1996,7 +2053,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
         if (targets.length > 0) {
           setPlayerTargetPrompt({
             action: selectedCard,
-            targetKeys: targets.map((item) => `${item.owner}:${item.card.id}`)
+            targetKeys: targets.map(getTableCardKey)
           });
           newLogs.unshift('Plot Grab is waiting for you to choose a loose rival property.');
         } else {
@@ -2004,22 +2061,16 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
           showToast('Plot Grab', 'No loose rival property is available yet.');
         }
       } else if (selectedCard.actionKind === 'swapProperty') {
-        const ownProperty = getLoosePropertiesForOwner(tableCards, playedBy)[0];
-        const rivalProperty = getLoosePropertyTargets(tableCards, playedBy)[0];
-        if (ownProperty && rivalProperty && !blockTargetedAction(rivalProperty.owner)) {
-          setTableCards((cards) =>
-            cards.map((item) => {
-              if (item.card.id === ownProperty.card.id && item.owner === ownProperty.owner) {
-                return { ...item, owner: rivalProperty.owner };
-              }
-              if (item.card.id === rivalProperty.card.id && item.owner === rivalProperty.owner) {
-                return { ...item, owner: playedBy };
-              }
-              return item;
-            })
-          );
-          newLogs.unshift(`Street Swap traded ${ownProperty.card.name} for ${rivalProperty.card.name}.`);
-          showToast('Street Swap', 'Property owners swapped.');
+        const ownTargets = getLoosePropertiesForOwner(tableCards, playedBy);
+        const rivalTargets = getLoosePropertyTargets(tableCards, playedBy);
+        if (ownTargets.length > 0 && rivalTargets.length > 0) {
+          setStreetSwapPrompt({
+            action: selectedCard,
+            actor: playedBy,
+            ownKeys: ownTargets.map(getTableCardKey),
+            rivalKeys: rivalTargets.map(getTableCardKey)
+          });
+          newLogs.unshift('Street Swap is waiting for you to choose both properties.');
         } else {
           newLogs.unshift('Street Swap needs one of your properties and one rival property.');
           showToast('Street Swap', 'No valid property pair is available yet.');
@@ -2081,6 +2132,10 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
 
   const assignWildcardDistrict = useCallback((districtName: string) => {
     if (!wildcardPrompt) return;
+    const allowedDistricts = wildcardPrompt.card.wildDistricts?.length
+      ? wildcardPrompt.card.wildDistricts
+      : districtSets.map((district) => district.name);
+    if (!allowedDistricts.includes(districtName)) return;
     const district = districtSets.find((item) => item.name === districtName);
     if (!district) return;
 
@@ -2318,6 +2373,49 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
     }
     setPlayerTargetPrompt(null);
   }, [animatePlayedCardsToOwner, defendedOwners, playerTargetPrompt, showToast, tableCards]);
+
+  const resolveStreetSwap = useCallback(() => {
+    if (!streetSwapPrompt?.selectedRivalKey || !streetSwapPrompt.selectedOwnKey) return;
+    const [rivalOwner, rivalId] = streetSwapPrompt.selectedRivalKey.split(':');
+    const [ownOwner, ownId] = streetSwapPrompt.selectedOwnKey.split(':');
+    if (ownOwner !== streetSwapPrompt.actor) return;
+
+    const rivalCard = tableCards.find((item) => item.owner === rivalOwner && item.card.id === rivalId);
+    const ownCard = tableCards.find((item) => item.owner === ownOwner && item.card.id === ownId);
+    if (!rivalCard || !ownCard) {
+      showToast('Street Swap', 'That swap is no longer available.');
+      setStreetSwapPrompt(null);
+      return;
+    }
+
+    if (defendedOwners.includes(rivalOwner)) {
+      setDefendedOwners((owners) => owners.filter((owner) => owner !== rivalOwner));
+      setTurnLog((entries) => [`${rivalOwner}'s Just Say No cancelled Street Swap.`, ...entries].slice(0, 40));
+      showToast('Action blocked', `${rivalOwner} used Just Say No.`);
+      setStreetSwapPrompt(null);
+      return;
+    }
+
+    const completeSwap = () => setTableCards((cards) =>
+      cards.map((item) => {
+        if (item.owner === ownOwner && item.card.id === ownId) {
+          return { ...item, owner: rivalOwner };
+        }
+        if (item.owner === rivalOwner && item.card.id === rivalId) {
+          return { ...item, owner: streetSwapPrompt.actor };
+        }
+        return item;
+      })
+    );
+
+    animatePlayedCardsToOwner([rivalCard], streetSwapPrompt.actor, completeSwap);
+    setTurnLog((entries) => [
+      `Street Swap traded ${ownCard.card.name} to ${rivalOwner} for ${rivalCard.card.name}.`,
+      ...entries
+    ].slice(0, 40));
+    showToast('Street Swap', `Swapped ${ownCard.card.name} for ${rivalCard.card.name}.`);
+    setStreetSwapPrompt(null);
+  }, [animatePlayedCardsToOwner, defendedOwners, showToast, streetSwapPrompt, tableCards]);
 
   const resolveSetTarget = useCallback((targetKey: string) => {
     if (!setTargetPrompt) return;
@@ -3173,6 +3271,12 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
         return;
       }
 
+      if (cardGuideOpen) {
+        event.preventDefault();
+        setCardGuideOpen(false);
+        return;
+      }
+
       if (scannerOpen) {
         event.preventDefault();
         setScannerOpen(false);
@@ -3188,6 +3292,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
+    cardGuideOpen,
     confirmDiscardSettingsOpen,
     requestCloseSettingsPanel,
     rulesGuideOpen,
@@ -3206,6 +3311,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
             settingsAvailable={Boolean(sharedRoom) && !roomHasStarted && roomRole === 'host'}
             onHome={navigateHome}
             onRules={() => setRulesGuideOpen(true)}
+            onCards={() => setCardGuideOpen(true)}
             onSettings={() => setScreen('settings')}
           />
         )}
@@ -3214,14 +3320,24 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
           <section className={`dashboard-grid ${roomsCollapsed ? '' : 'rooms-expanded'}`}>
             <div className="dashboard-main">
               <div className="surface command-center">
-                <button
-                  className="command-rules-button"
-                  onClick={() => setRulesGuideOpen(true)}
-                  aria-label="Open game rules"
-                  title="Game rules"
-                >
-                  <BookOpen size={21} />
-                </button>
+                <div className="command-guide-actions">
+                  <button
+                    className="command-rules-button"
+                    onClick={() => setRulesGuideOpen(true)}
+                    aria-label="Open game rules"
+                    title="Game rules"
+                  >
+                    <BookOpen size={21} />
+                  </button>
+                  <button
+                    className="command-rules-button"
+                    onClick={() => setCardGuideOpen(true)}
+                    aria-label="Open card list"
+                    title="Card list"
+                  >
+                    <Layers size={21} />
+                  </button>
+                </div>
                 <div className="section-kicker">Table launcher</div>
                 <h1>Property Hustle</h1>
                 <p className="lead">
@@ -3482,7 +3598,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
               ref={tableGridRef}
               style={{ '--player-panel-width': `${playerPanelWidth}px`, '--board-height': `${boardHeight}px` } as CSSProperties}
             >
-              <div className="felt-table" ref={feltTableRef}>
+              <div className="felt-table" ref={feltTableRef} onWheel={scrollPageFromFelt}>
                 <TablePlayerLayout
                   players={tablePlayers}
                   activeIndex={currentPlayerIndex}
@@ -3584,7 +3700,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
                 </div>
               </div>}
 
-              {!handCollapsed && <div className={`hand-scroll-wrap ${hand.length > 4 ? 'can-scroll' : ''}`}>
+              {!handCollapsed && <div className={`hand-scroll-wrap ${handCanScroll ? 'can-scroll' : ''}`}>
                 <div className={`hand-scroll ${isCardAnimating ? 'animating' : ''}`} ref={handTargetRef}>
                   {hand.map((card) => (
                     <button
@@ -3635,6 +3751,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
         {rulesGuideOpen && (
           <RulesGuide rules={rules} onClose={() => setRulesGuideOpen(false)} />
         )}
+        {cardGuideOpen && <CardGuide onClose={() => setCardGuideOpen(false)} />}
         {confirmDiscardSettingsOpen && (
           <ConfirmDiscardSettings
             onCancel={() => setConfirmDiscardSettingsOpen(false)}
@@ -3760,12 +3877,12 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
               <p>Select any loose property currently owned by a rival.</p>
               <div className="action-target-grid">
                 {tableCards
-                  .filter((item) => playerTargetPrompt.targetKeys.includes(`${item.owner}:${item.card.id}`))
+                  .filter((item) => playerTargetPrompt.targetKeys.includes(getTableCardKey(item)))
                   .map((item) => (
                     <button
                       className="action-target-card"
-                      key={`${item.owner}-${item.card.id}`}
-                      onClick={() => resolvePlayerTarget(`${item.owner}:${item.card.id}`)}
+                      key={getTableCardKey(item)}
+                      onClick={() => resolvePlayerTarget(getTableCardKey(item))}
                       style={{ '--accent': item.card.accent } as CSSProperties}
                     >
                       <small>{item.owner}</small>
@@ -3773,6 +3890,84 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
                       <span>{item.card.value}M</span>
                     </button>
                   ))}
+              </div>
+            </div>
+          </div>
+        )}
+        {streetSwapPrompt && (
+          <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Choose properties to swap">
+            <div className="confirm-sheet action-choice-sheet street-swap-sheet">
+              <div className="section-kicker">Street Swap</div>
+              <h2>Choose the trade</h2>
+              <p>Pick one loose rival property to take, then pick one loose property of yours to give back.</p>
+              <div className="street-swap-columns">
+                <section>
+                  <h3>Take from rival</h3>
+                  <div className="action-target-grid">
+                    {tableCards
+                      .filter((item) => streetSwapPrompt.rivalKeys.includes(getTableCardKey(item)))
+                      .map((item) => {
+                        const key = getTableCardKey(item);
+                        return (
+                          <button
+                            className={`action-target-card ${streetSwapPrompt.selectedRivalKey === key ? 'selected' : ''}`}
+                            key={key}
+                            onClick={() =>
+                              setStreetSwapPrompt((prompt) =>
+                                prompt ? { ...prompt, selectedRivalKey: key } : prompt
+                              )
+                            }
+                            style={{ '--accent': item.card.accent } as CSSProperties}
+                          >
+                            <small>{item.owner}</small>
+                            <strong>{item.card.name}</strong>
+                            {item.card.district && <em>{item.card.district}</em>}
+                            <span>{item.card.value}M</span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                </section>
+                <section>
+                  <h3>Give from yours</h3>
+                  <div className="action-target-grid">
+                    {tableCards
+                      .filter((item) => streetSwapPrompt.ownKeys.includes(getTableCardKey(item)))
+                      .map((item) => {
+                        const key = getTableCardKey(item);
+                        return (
+                          <button
+                            className={`action-target-card ${streetSwapPrompt.selectedOwnKey === key ? 'selected' : ''}`}
+                            key={key}
+                            onClick={() =>
+                              setStreetSwapPrompt((prompt) =>
+                                prompt ? { ...prompt, selectedOwnKey: key } : prompt
+                              )
+                            }
+                            style={{ '--accent': item.card.accent } as CSSProperties}
+                          >
+                            <small>Your property</small>
+                            <strong>{item.card.name}</strong>
+                            {item.card.district && <em>{item.card.district}</em>}
+                            <span>{item.card.value}M</span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                </section>
+              </div>
+              <div className="confirm-actions">
+                <button className="ghost-button" onClick={() => setStreetSwapPrompt(null)}>
+                  Keep card played
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={!streetSwapPrompt.selectedRivalKey || !streetSwapPrompt.selectedOwnKey}
+                  onClick={resolveStreetSwap}
+                >
+                  <RotateCcw size={18} />
+                  Swap selected
+                </button>
               </div>
             </div>
           </div>
@@ -3814,7 +4009,13 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
               <h2>Choose a district color</h2>
               <p>The wildcard will count toward the selected property set.</p>
               <div className="wildcard-district-grid">
-                {districtSets.map((district) => {
+                {districtSets
+                  .filter((district) =>
+                    wildcardPrompt.card.wildDistricts?.length
+                      ? wildcardPrompt.card.wildDistricts.includes(district.name)
+                      : true
+                  )
+                  .map((district) => {
                   const currentCount = propertyCards.filter(
                     (item) =>
                       item.owner === wildcardPrompt.owner &&
@@ -4215,6 +4416,7 @@ function TopBar({
   settingsAvailable,
   onHome,
   onRules,
+  onCards,
   onSettings
 }: {
   code: string;
@@ -4222,6 +4424,7 @@ function TopBar({
   settingsAvailable: boolean;
   onHome: () => void;
   onRules: () => void;
+  onCards: () => void;
   onSettings: () => void;
 }) {
   return (
@@ -4235,6 +4438,11 @@ function TopBar({
         {(screen === 'lobby' || screen === 'game') && (
           <button className="icon-button" onClick={onRules} aria-label="Game rules" title="Game rules">
             <BookOpen size={19} />
+          </button>
+        )}
+        {(screen === 'lobby' || screen === 'game') && (
+          <button className="icon-button" onClick={onCards} aria-label="Card list" title="Card list">
+            <Layers size={19} />
           </button>
         )}
         {screen !== 'dashboard' && (
@@ -4348,6 +4556,122 @@ function RulesGuide({ rules, onClose }: { rules: RoomRules; onClose: () => void 
         </div>
       </section>
     </div>
+  );
+}
+
+function CardGuide({ onClose }: { onClose: () => void }) {
+  const countForCard = (card: GameCard) => starterDeckCounts[card.id] ?? 1;
+  const propertyGroups = districtSets.map((district) => ({
+    district,
+    cards: starterDeck.filter((card) => card.type === 'property' && card.district === district.name)
+  }));
+  const wildCards = starterDeck.filter((card) => card.type === 'wild');
+  const moneyCards = starterDeck.filter((card) => card.type === 'money');
+  const actionCards = starterDeck.filter(
+    (card, index, cards) =>
+      (card.type === 'action' || card.type === 'rent' || card.type === 'defense') &&
+      cards.findIndex((candidate) => candidate.name === card.name) === index
+  );
+
+  return (
+    <div className="confirm-backdrop rules-guide-backdrop" role="dialog" aria-modal="true" aria-label="Card list">
+      <section className="rules-guide card-guide">
+        <header className="rules-guide-header">
+          <div>
+            <div className="section-kicker">Card list</div>
+            <h2>Cards in this deck</h2>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="Close card list">
+            <X size={20} />
+          </button>
+        </header>
+
+        <div className="rules-guide-scroll">
+          <section className="card-guide-section">
+            <div className="rules-section-heading">
+              <div className="section-kicker">Property districts</div>
+              <h3>Set sizes</h3>
+            </div>
+            <div className="card-guide-set-grid">
+              {propertyGroups.map(({ district, cards }) => (
+                <article
+                  className="card-guide-set"
+                  key={district.name}
+                  style={{ '--accent': district.accent } as CSSProperties}
+                >
+                  <div className="card-guide-set-head">
+                    <span className="district-color-dot" />
+                    <strong>{district.name}</strong>
+                    <b>{district.size} needed</b>
+                  </div>
+                  <p>{cards.length} property cards in the deck</p>
+                  <ul aria-label={`${district.name} property cards`}>
+                    {cards.map((card) => (
+                      <li key={card.id}>
+                        <span>{card.name}</span>
+                        <b>{card.value}M</b>
+                      </li>
+                    ))}
+                  </ul>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <CardGuideSection title="Property wildcards" kicker="Wild cards" cards={wildCards} countForCard={countForCard} />
+          <CardGuideSection title="Action, rent, and defense cards" kicker="Action cards" cards={actionCards} countForCard={countForCard} />
+          <CardGuideSection title="Money cards" kicker="Bank cards" cards={moneyCards} countForCard={countForCard} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CardGuideSection({
+  title,
+  kicker,
+  cards,
+  countForCard
+}: {
+  title: string;
+  kicker: string;
+  cards: GameCard[];
+  countForCard: (card: GameCard) => number;
+}) {
+  return (
+    <section className="card-guide-section">
+      <div className="rules-section-heading">
+        <div className="section-kicker">{kicker}</div>
+        <h3>{title}</h3>
+      </div>
+      <div className="card-guide-card-grid">
+        {cards.map((card) => (
+          <CardGuideCard card={card} count={countForCard(card)} key={card.id} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CardGuideCard({ card, count }: { card: GameCard; count: number }) {
+  const copy =
+    card.type === 'wild' && card.wildDistricts?.length
+      ? `Can play as ${card.wildDistricts.join(' or ')}.`
+      : card.text;
+
+  return (
+    <article
+      className={`card-guide-card ${getWildcardBand(card) ? 'wild-choice' : ''}`}
+      style={getCardStyle(card)}
+    >
+      <div className="card-guide-card-band">
+        <span>{card.type}</span>
+        <em>x{count}</em>
+      </div>
+      <strong>{card.name}</strong>
+      <p>{copy}</p>
+      <b>{card.value}M</b>
+    </article>
   );
 }
 
