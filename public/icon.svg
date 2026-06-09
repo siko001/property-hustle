@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Property Hustle icon">
+  <rect width="512" height="512" rx="96" fill="#0b6b55"/>
+  <path d="M88 154h336v252H88z" fill="#f6f9ff"/>
+  <path d="M88 154h336v58H88z" fill="#f4b942"/>
+  <path d="M126 250h86v112h-86z" fill="#18a6a6"/>
+  <path d="M242 250h144v34H242zm0 62h112v34H242z" fill="#17212b"/>
+  <path d="M126 118h260v36H126z" fill="#e35d4f"/>
+  <path d="M126 118h54v36h-54z" fill="#7255d9"/>
+</svg>
