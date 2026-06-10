@@ -18,7 +18,6 @@ import {
   ChevronRight,
   Copy,
   Filter,
-  Gamepad2,
   Home,
   KeyRound,
   Layers,
@@ -43,16 +42,19 @@ import {
   X,
   Zap
 } from 'lucide-react';
+import { CardGuide } from '@/components/home/CardGuide';
+import { FlyingCard } from '@/components/home/FlyingCard';
+import { RulesGuide } from '@/components/home/RulesGuide';
+import { TableMiniSummary } from '@/components/home/TableMiniSummary';
+import { TopBar } from '@/components/home/TopBar';
+import type { CardFlight, CardRect, RoomMode, Screen, TableCard, TableZone } from '@/components/home/types';
+import { getCardStyle, getDistrictAccent, getWildcardBand } from '@/lib/game/card-style';
 import { chooseBotMove } from '@/lib/game/bots';
 import { districtSets, starterDeck, starterDeckCounts } from '@/lib/game/deck';
 import { defaultRules, playStyleCopy, playStyleLabels } from '@/lib/game/rules';
 import type { CardType, Difficulty, GameCard, Player, PlayStyle, RoomRules } from '@/lib/game/types';
 import type { RoomJoinResult, SharedRoom } from '@/lib/rooms/types';
 
-type Screen = 'dashboard' | 'settings' | 'lobby' | 'offline' | 'game';
-type RoomMode = 'online' | 'offline' | 'bots';
-type TableZone = 'property' | 'bank' | 'action';
-type TableCard = { card: GameCard; zone: TableZone; playedAs: CardType; owner: string };
 type Toast = { id: number; title: string; body: string };
 type RoomFilter = 'all' | 'joinable' | 'mine' | 'online' | 'offline' | 'bots';
 type ActiveRoom = {
@@ -77,21 +79,6 @@ type ParsedInvite = {
   code: string;
   mode: RoomMode;
   secret?: string;
-};
-type CardRect = {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-};
-type CardFlight = {
-  id: string;
-  card: GameCard;
-  faceDown: boolean;
-  from: CardRect;
-  x: number;
-  y: number;
-  delay: number;
 };
 type RoomRole = 'host' | 'member' | 'viewer';
 type RoomNavigation = 'push' | 'replace' | 'none';
@@ -353,38 +340,6 @@ function getZoneForCard(card: GameCard): TableZone {
 
 function normalizePlayType(card: GameCard): CardType {
   return card.type === 'wild' ? 'property' : card.type;
-}
-
-function getDistrictAccent(districtName: string) {
-  return districtSets.find((district) => district.name === districtName)?.accent ?? '#7b61ff';
-}
-
-function getWildcardBand(card: GameCard) {
-  if (card.type !== 'wild' || card.district !== 'Wildcard' || !card.wildDistricts?.length) {
-    return null;
-  }
-
-  const accents = card.wildDistricts.map(getDistrictAccent);
-  if (accents.length === 2) {
-    return `linear-gradient(90deg, ${accents[0]} 0 50%, ${accents[1]} 50% 100%)`;
-  }
-
-  const step = 100 / accents.length;
-  const stops = accents
-    .map((accent, index) => `${accent} ${index * step}% ${(index + 1) * step}%`)
-    .join(', ');
-
-  return `linear-gradient(90deg, ${stops})`;
-}
-
-function getCardStyle(card: GameCard, extra?: CSSProperties) {
-  const wildcardBand = getWildcardBand(card);
-
-  return {
-    ...extra,
-    '--accent': card.accent,
-    ...(wildcardBand ? { '--wild-band': wildcardBand } : {})
-  } as CSSProperties;
 }
 
 function getCompletedDistricts(cards: TableCard[], owner: string) {
@@ -4410,271 +4365,6 @@ function ActiveRoomsPanel({
   );
 }
 
-function TopBar({
-  code,
-  screen,
-  settingsAvailable,
-  onHome,
-  onRules,
-  onCards,
-  onSettings
-}: {
-  code: string;
-  screen: Screen;
-  settingsAvailable: boolean;
-  onHome: () => void;
-  onRules: () => void;
-  onCards: () => void;
-  onSettings: () => void;
-}) {
-  return (
-    <header className="topbar">
-      <button className="brand-button" onClick={onHome}>
-        <Gamepad2 size={22} />
-        <span>Property Hustle</span>
-      </button>
-      <nav className="top-actions">
-        {(screen === 'lobby' || screen === 'game') && <span className="code-chip">{code}</span>}
-        {(screen === 'lobby' || screen === 'game') && (
-          <button className="icon-button" onClick={onRules} aria-label="Game rules" title="Game rules">
-            <BookOpen size={19} />
-          </button>
-        )}
-        {(screen === 'lobby' || screen === 'game') && (
-          <button className="icon-button" onClick={onCards} aria-label="Card list" title="Card list">
-            <Layers size={19} />
-          </button>
-        )}
-        {screen !== 'dashboard' && (
-          <button className="icon-button" onClick={onHome} aria-label="Home">
-            <Home size={19} />
-          </button>
-        )}
-        {settingsAvailable && (
-          <button className="icon-button" onClick={onSettings} aria-label="Room settings">
-            <Settings2 size={19} />
-          </button>
-        )}
-      </nav>
-    </header>
-  );
-}
-
-function RulesGuide({ rules, onClose }: { rules: RoomRules; onClose: () => void }) {
-  const actionCards = starterDeck.filter(
-    (card, index, cards) =>
-      Boolean(card.actionKind) &&
-      cards.findIndex((candidate) => candidate.name === card.name) === index
-  );
-  const playsPerTurn = rules.playStyle === 'rush' || rules.playStyle === 'draft' ? 2 : 3;
-
-  return (
-    <div className="confirm-backdrop rules-guide-backdrop" role="dialog" aria-modal="true" aria-label="Game rules">
-      <section className="rules-guide">
-        <header className="rules-guide-header">
-          <div>
-            <div className="section-kicker">How to play</div>
-            <h2>Property Hustle rules</h2>
-          </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close rules">
-            <X size={20} />
-          </button>
-        </header>
-
-        <div className="rules-guide-scroll">
-          <div className="rules-overview">
-            <article>
-              <span>1</span>
-              <div>
-                <strong>Draw cards</strong>
-                <p>Draw 2 at the beginning of your turn. If your hand becomes empty, immediately draw 5.</p>
-              </div>
-            </article>
-            <article>
-              <span>2</span>
-              <div>
-                <strong>Play your turn</strong>
-                <p>Play or bank up to {playsPerTurn} cards under this room&apos;s {playStyleLabels[rules.playStyle]} rules.</p>
-              </div>
-            </article>
-            <article>
-              <span>3</span>
-              <div>
-                <strong>Build three sets</strong>
-                <p>Complete 3 property districts before your rivals to win the game.</p>
-              </div>
-            </article>
-          </div>
-
-          <div className="rules-detail-grid">
-            <article>
-              <h3>Properties and wildcards</h3>
-              <p>Place properties into matching colored districts. Wildcards may join a district and count toward its required size.</p>
-            </article>
-            <article>
-              <h3>Money and payments</h3>
-              <p>Money cards are stored in your bank. Payments are made from banked cards, and no change is returned.</p>
-            </article>
-            <article>
-              <h3>Actions and defense</h3>
-              <p>Actions count as plays. Just Say No can cancel an action aimed at you when the response prompt appears.</p>
-            </article>
-            <article>
-              <h3>Draw pile</h3>
-              <p>When the draw pile runs out, the discard pile is shuffled to create a fresh draw pile. Cards still in hands, banks, property districts, or active table areas stay out.</p>
-            </article>
-            <article>
-              <h3>Developments and landmarks</h3>
-              <p>Block Works may only develop a complete district. Skyline Landmark may only follow Block Works on that district. A Deal Breaker takes the complete district and both upgrades.</p>
-            </article>
-            <article>
-              <h3>Payments</h3>
-              <p>The payer chooses cards already on their table. Bank cards and properties may be used, no change is returned, and cards in hand cannot pay a debt.</p>
-            </article>
-          </div>
-
-          <div className="rules-section-heading">
-            <div className="section-kicker">Card reference</div>
-            <h3>Action and defense cards</h3>
-          </div>
-          <div className="rules-action-grid">
-            {actionCards.map((card) => (
-              <article
-                className="rules-action-card"
-                key={card.name}
-                style={{ '--accent': card.accent } as CSSProperties}
-              >
-                <span>{card.type}</span>
-                <span className="rules-card-title">
-                  <strong>{card.name}</strong>
-                </span>
-                <p>{card.text}</p>
-                <b>{card.value}M</b>
-              </article>
-            ))}
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function CardGuide({ onClose }: { onClose: () => void }) {
-  const countForCard = (card: GameCard) => starterDeckCounts[card.id] ?? 1;
-  const propertyGroups = districtSets.map((district) => ({
-    district,
-    cards: starterDeck.filter((card) => card.type === 'property' && card.district === district.name)
-  }));
-  const wildCards = starterDeck.filter((card) => card.type === 'wild');
-  const moneyCards = starterDeck.filter((card) => card.type === 'money');
-  const actionCards = starterDeck.filter(
-    (card, index, cards) =>
-      (card.type === 'action' || card.type === 'rent' || card.type === 'defense') &&
-      cards.findIndex((candidate) => candidate.name === card.name) === index
-  );
-
-  return (
-    <div className="confirm-backdrop rules-guide-backdrop" role="dialog" aria-modal="true" aria-label="Card list">
-      <section className="rules-guide card-guide">
-        <header className="rules-guide-header">
-          <div>
-            <div className="section-kicker">Card list</div>
-            <h2>Cards in this deck</h2>
-          </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close card list">
-            <X size={20} />
-          </button>
-        </header>
-
-        <div className="rules-guide-scroll">
-          <section className="card-guide-section">
-            <div className="rules-section-heading">
-              <div className="section-kicker">Property districts</div>
-              <h3>Set sizes</h3>
-            </div>
-            <div className="card-guide-set-grid">
-              {propertyGroups.map(({ district, cards }) => (
-                <article
-                  className="card-guide-set"
-                  key={district.name}
-                  style={{ '--accent': district.accent } as CSSProperties}
-                >
-                  <div className="card-guide-set-head">
-                    <span className="district-color-dot" />
-                    <strong>{district.name}</strong>
-                    <b>{district.size} needed</b>
-                  </div>
-                  <p>{cards.length} property cards in the deck</p>
-                  <ul aria-label={`${district.name} property cards`}>
-                    {cards.map((card) => (
-                      <li key={card.id}>
-                        <span>{card.name}</span>
-                        <b>{card.value}M</b>
-                      </li>
-                    ))}
-                  </ul>
-                </article>
-              ))}
-            </div>
-          </section>
-
-          <CardGuideSection title="Property wildcards" kicker="Wild cards" cards={wildCards} countForCard={countForCard} />
-          <CardGuideSection title="Action, rent, and defense cards" kicker="Action cards" cards={actionCards} countForCard={countForCard} />
-          <CardGuideSection title="Money cards" kicker="Bank cards" cards={moneyCards} countForCard={countForCard} />
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function CardGuideSection({
-  title,
-  kicker,
-  cards,
-  countForCard
-}: {
-  title: string;
-  kicker: string;
-  cards: GameCard[];
-  countForCard: (card: GameCard) => number;
-}) {
-  return (
-    <section className="card-guide-section">
-      <div className="rules-section-heading">
-        <div className="section-kicker">{kicker}</div>
-        <h3>{title}</h3>
-      </div>
-      <div className="card-guide-card-grid">
-        {cards.map((card) => (
-          <CardGuideCard card={card} count={countForCard(card)} key={card.id} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function CardGuideCard({ card, count }: { card: GameCard; count: number }) {
-  const copy =
-    card.type === 'wild' && card.wildDistricts?.length
-      ? `Can play as ${card.wildDistricts.join(' or ')}.`
-      : card.text;
-
-  return (
-    <article
-      className={`card-guide-card ${getWildcardBand(card) ? 'wild-choice' : ''}`}
-      style={getCardStyle(card)}
-    >
-      <div className="card-guide-card-band">
-        <span>{card.type}</span>
-        <em>x{count}</em>
-      </div>
-      <strong>{card.name}</strong>
-      <p>{copy}</p>
-      <b>{card.value}M</b>
-    </article>
-  );
-}
-
 function ModeTile({
   icon,
   title,
@@ -5294,42 +4984,6 @@ function SeatList({
   );
 }
 
-function FlyingCard({ flight }: { flight: CardFlight }) {
-  const style = getCardStyle(flight.card, {
-    left: flight.from.left,
-    top: flight.from.top,
-    width: flight.from.width,
-    height: flight.from.height,
-    animationDelay: `${flight.delay}ms`,
-    '--fly-x': `${flight.x}px`,
-    '--fly-y': `${flight.y}px`,
-    '--fly-mid-x': `${flight.x * 0.48}px`,
-    '--fly-mid-y': `${flight.y * 0.42 - 32}px`
-  } as CSSProperties);
-
-  return (
-    <div
-      className={`flying-card ${getWildcardBand(flight.card) ? 'wild-choice' : ''} ${flight.faceDown ? 'face-down' : ''}`}
-      style={style}
-      aria-hidden="true"
-    >
-      {flight.faceDown ? (
-        <div className="card-back-mark">
-          <Gamepad2 size={24} />
-          <span>Property Hustle</span>
-        </div>
-      ) : (
-        <>
-          <span>{flight.card.type}</span>
-          <strong>{flight.card.name}</strong>
-          <small>{flight.card.text}</small>
-          <b>{flight.card.value}M</b>
-        </>
-      )}
-    </div>
-  );
-}
-
 function TableZonePanel({
   zoneRef,
   title,
@@ -5420,83 +5074,6 @@ function TableZonePanel({
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function TableMiniSummary({
-  icon,
-  label,
-  cards,
-  total,
-  collapsed,
-  onToggle
-}: {
-  icon: ReactNode;
-  label: string;
-  cards: TableCard[];
-  total: string;
-  collapsed: boolean;
-  onToggle: () => void;
-}) {
-  const cardGroups =
-    label === 'Board'
-      ? Array.from(new Set(cards.map((item) => item.card.district ?? 'Properties'))).map(
-          (district) => ({
-            label: district,
-            cards: cards.filter((item) => (item.card.district ?? 'Properties') === district)
-          })
-        )
-      : cards.map((item) => ({ label: item.card.name, cards: [item] }));
-
-  return (
-    <div className={`table-mini-summary ${collapsed ? 'collapsed' : ''}`}>
-      <div className="table-mini-heading">
-        {icon}
-        <span>{label}</span>
-        <strong>{total}</strong>
-        <button
-          className="mini-summary-toggle"
-          type="button"
-          onClick={onToggle}
-          aria-expanded={!collapsed}
-          aria-label={`${collapsed ? 'Show' : 'Hide'} ${label.toLowerCase()} cards`}
-        >
-          <ChevronRight size={14} />
-        </button>
-      </div>
-      {!collapsed && <div className="table-mini-cards">
-        {cards.length === 0 ? (
-          <span className="table-mini-empty">No cards</span>
-        ) : (
-          <>
-            {cardGroups.map((group, groupIndex) => (
-              <div className="table-mini-set" key={`${label}-${group.label}-${groupIndex}`}>
-                {group.cards.map((item, index) => (
-                  <div
-                    className="table-mini-card"
-                    key={`${label}-${group.label}-${item.owner}-${item.card.id}-${index}`}
-                    style={{ '--accent': item.card.accent, '--mini-stack-index': index } as CSSProperties}
-                    title={`${item.card.name} - ${item.card.value}M`}
-                  >
-                    <small>{item.card.type}</small>
-                    <b>{item.card.name}</b>
-                    <em>{item.card.value}M</em>
-                  </div>
-                ))}
-                {label === 'Board' && group.cards.length > 1 && (
-                  <span className="table-mini-set-count">{group.cards.length}</span>
-                )}
-              </div>
-            ))}
-            {cardGroups.length > 4 && (
-              <span className="table-mini-more" title={`${cardGroups.length - 4} more stacks`}>
-                +{cardGroups.length - 4}
-              </span>
-            )}
-          </>
-        )}
-      </div>}
     </div>
   );
 }
