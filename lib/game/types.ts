@@ -37,3 +37,24 @@ export type GameCard = {
   actionKind?:ActionKind;
 };
 export type Room = { code:string; mode:'online'|'offline'|'bots'; players:Player[]; rules:RoomRules; status:'lobby'|'playing'|'paused'; round:number; currentPlayer:number; };
+
+export type RoomMode = 'online' | 'offline' | 'bots';
+export type TableZone = 'property' | 'bank' | 'action';
+export type TableCard = { card: GameCard; zone: TableZone; playedAs: CardType; owner: string };
+
+export type CardRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+export type CardFlight = {
+  id: string;
+  card: GameCard;
+  faceDown: boolean;
+  from: CardRect;
+  x: number;
+  y: number;
+  delay: number;
+};
