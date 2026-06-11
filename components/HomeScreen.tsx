@@ -1,653 +1,123 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, MutableRefObject, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react';
+import type {
+  CSSProperties,
+  PointerEvent as ReactPointerEvent,
+  WheelEvent as ReactWheelEvent
+} from 'react';
 import { useRouter } from 'next/navigation';
-import QRCode from 'qrcode';
 import {
-  Bot,
-  BookOpen,
   Check,
   ChevronRight,
-  Copy,
-  Filter,
-  Gamepad2,
   Home,
-  KeyRound,
   Layers,
-  Minus,
   Play,
-  Plus,
-  QrCode,
-  Radio,
   RotateCcw,
-  ScanLine,
-  Search,
-  Settings2,
   Shield,
-  Smartphone,
   Timer,
-  Trash2,
   Trophy,
-  Users,
-  Volume2,
-  Wifi,
-  WifiOff,
-  X,
-  Zap
+  Volume2
 } from 'lucide-react';
+import { CardGuide } from '@/components/home/CardGuide';
+import { ConfirmDiscardSettings, ConfirmEndTurn } from '@/components/home/dialogs';
+import { FlyingCard } from '@/components/home/FlyingCard';
+import { MetaPill } from '@/components/home/primitives';
+import {
+  DiscardPromptDialog,
+  IncomingActionPromptDialog,
+  PaymentPromptDialog,
+  PlayerTargetPromptDialog,
+  RentTargetPromptDialog,
+  SetTargetPromptDialog,
+  StreetSwapPromptDialog,
+  UpgradePromptDialog,
+  WildcardPromptDialog
+} from '@/components/home/prompts';
+import { RulesGuide } from '@/components/home/RulesGuide';
+import { ScannerPanel } from '@/components/home/ScannerPanel';
+import { TableMiniSummary } from '@/components/home/TableMiniSummary';
+import { TablePlayerLayout } from '@/components/home/TablePlayers';
+import { TopBar } from '@/components/home/TopBar';
+import { TurnToast } from '@/components/home/TurnToast';
+import { useQrCode } from '@/components/home/hooks/useQrCode';
+import { useToast } from '@/components/home/hooks/useToast';
+import { DashboardScreen } from '@/components/home/screens/DashboardScreen';
+import { LobbyScreen } from '@/components/home/screens/LobbyScreen';
+import { OfflineScreen } from '@/components/home/screens/OfflineScreen';
+import { SettingsScreen } from '@/components/home/screens/SettingsScreen';
+import {
+  DELETED_LOCAL_ROOMS_KEY,
+  HAND_PANEL_MAX_HEIGHT,
+  HAND_PANEL_MIN_HEIGHT,
+  INITIAL_LOCAL_KEY,
+  INITIAL_ROOM_CODE
+} from '@/components/home/constants';
+import type {
+  ActiveRoom,
+  CardFlight,
+  CardRect,
+  DiscardPrompt,
+  IncomingActionPrompt,
+  PaymentPrompt,
+  PersistedGameState,
+  PlayerTargetPrompt,
+  RentTargetPrompt,
+  RoomMode,
+  RoomNavigation,
+  RoomRole,
+  Screen,
+  SetTargetPrompt,
+  StreetSwapPrompt,
+  TableCard,
+  TableZone,
+  UpgradePrompt,
+  WildcardPrompt
+} from '@/components/home/types';
 import { chooseBotMove } from '@/lib/game/bots';
-import { districtSets, starterDeck, starterDeckCounts } from '@/lib/game/deck';
-import { defaultRules, playStyleCopy, playStyleLabels } from '@/lib/game/rules';
-import type { CardType, Difficulty, GameCard, Player, PlayStyle, RoomRules } from '@/lib/game/types';
+import { getCardStyle, getWildcardBand } from '@/lib/game/card-style';
+import {
+  EMPTY_HAND_DRAW,
+  MAX_BOTS,
+  MAX_HAND_SIZE,
+  MAX_PLAYERS,
+  MIN_PLAYERS,
+  NORMAL_TURN_DRAW,
+  OPENING_HAND_SIZE
+} from '@/lib/game/constants';
+import { districtSets } from '@/lib/game/deck';
+import {
+  canChargeRent,
+  chooseBotPayableTarget,
+  choosePaymentCards,
+  drawWithRecycledPile,
+  getCompletedSetCount,
+  getCompleteSetTargets,
+  getEligibleUpgradeDistricts,
+  getLoosePropertiesForOwner,
+  getLoosePropertyTargets,
+  getPaymentKey,
+  getRivalOwnersWithPayableAssets,
+  getTableCardKey,
+  getZoneForCard,
+  makeDiscardCard,
+  makeDrawPile,
+  normalizePlayType,
+  shuffleCards,
+  toCardRect
+} from '@/lib/game/engine';
+import { defaultRules } from '@/lib/game/rules';
+import type { CardType, Difficulty, GameCard, Player, RoomRules } from '@/lib/game/types';
 import type { RoomJoinResult, SharedRoom } from '@/lib/rooms/types';
-
-type Screen = 'dashboard' | 'settings' | 'lobby' | 'offline' | 'game';
-type RoomMode = 'online' | 'offline' | 'bots';
-type TableZone = 'property' | 'bank' | 'action';
-type TableCard = { card: GameCard; zone: TableZone; playedAs: CardType; owner: string };
-type Toast = { id: number; title: string; body: string };
-type RoomFilter = 'all' | 'joinable' | 'mine' | 'online' | 'offline' | 'bots';
-type ActiveRoom = {
-  code: string;
-  title: string;
-  host: string;
-  mode: RoomMode;
-  playerCount: number;
-  maxPlayers: number;
-  bots: number;
-  playStyle: PlayStyle;
-  status: 'lobby' | 'playing';
-  myRoom?: boolean;
-  secret?: string;
-  updated: string;
-};
-type BarcodeDetectorShape = {
-  detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
-};
-type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => BarcodeDetectorShape;
-type ParsedInvite = {
-  code: string;
-  mode: RoomMode;
-  secret?: string;
-};
-type CardRect = {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-};
-type CardFlight = {
-  id: string;
-  card: GameCard;
-  faceDown: boolean;
-  from: CardRect;
-  x: number;
-  y: number;
-  delay: number;
-};
-type RoomRole = 'host' | 'member' | 'viewer';
-type RoomNavigation = 'push' | 'replace' | 'none';
-type PlayerTargetPrompt = {
-  action: GameCard;
-  targetKeys: string[];
-};
-type RentTargetPrompt = {
-  action: GameCard;
-  actor: string;
-  targetOwners: string[];
-  doubleRentCardId?: string;
-  useDoubleRent: boolean;
-};
-type SetTargetPrompt = {
-  action: GameCard;
-  targets: Array<{
-    key: string;
-    owner: string;
-    district: string;
-    count: number;
-    value: number;
-    accent: string;
-    hasHouse: boolean;
-    hasHotel: boolean;
-  }>;
-};
-type IncomingActionPrompt = {
-  actor: string;
-  action: GameCard;
-};
-type WildcardPrompt = {
-  card: GameCard;
-  owner: string;
-};
-type UpgradePrompt = {
-  card: GameCard;
-  owner: string;
-  kind: 'house' | 'hotel';
-  districtNames: string[];
-};
-type PaymentPrompt = {
-  payer: string;
-  payee: string;
-  amount: number;
-  actionName: string;
-  selectedKeys: string[];
-  forcedKeys: string[];
-};
-type DiscardPrompt = {
-  count: number;
-  selectedIds: string[];
-};
-type PersistedGameState = {
-  hand: GameCard[];
-  drawPile: GameCard[];
-  tableCards: TableCard[];
-  discardPile: TableCard[];
-  turnPlays: CardType[];
-  actionsPlayed: number;
-  currentPlayerIndex: number;
-  turnSerial: number;
-  turnActivitySerial: number;
-  drawnTurnSerial: number;
-  round: number;
-  turnLog: string[];
-  activeCardId: string | null;
-  defendedOwners: string[];
-  winner: string | null;
-  botHands: Record<string, GameCard[]>;
-};
-
-const MIN_PLAYERS = 2;
-const MAX_PLAYERS = 5;
-const MAX_BOTS = 4;
-const INITIAL_ROOM_CODE = 'ROOM42';
-const INITIAL_LOCAL_KEY = 'HOST-0000-KEYS';
-const OPENING_HAND_SIZE = 5;
-const NORMAL_TURN_DRAW = 2;
-const EMPTY_HAND_DRAW = 5;
-const MAX_HAND_SIZE = 7;
-const HAND_PANEL_MIN_HEIGHT = 188;
-const HAND_PANEL_MAX_HEIGHT = 450;
-const DELETED_LOCAL_ROOMS_KEY = 'property-hustle-deleted-local-rooms';
-const GAME_STATE_STORAGE_PREFIX = 'property-hustle-game-state';
-const roomFilters: Array<{ id: RoomFilter; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'joinable', label: 'Joinable' },
-  { id: 'mine', label: 'Mine' },
-  { id: 'online', label: 'Online' },
-  { id: 'offline', label: 'LAN' },
-  { id: 'bots', label: 'Bots' }
-];
-
-const modeCopy: Record<RoomMode, { title: string; body: string }> = {
-  bots: {
-    title: 'Bot table',
-    body: 'Fill seats with easy, medium, or hard computer opponents.'
-  },
-
-  offline: {
-    title: 'Local hotspot',
-    body: 'One host device creates a secret LAN key for nearby players.'
-  },
-
-  online: {
-    title: 'Online room',
-    body: 'Private room for 2 to 5 players with optional bot seats.'
-  },
-
-};
-
-function makeCode(length = 6) {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const values =
-    typeof crypto !== 'undefined' ? crypto.getRandomValues(new Uint8Array(length)) : undefined;
-
-  return Array.from({ length }, (_, index) => {
-    const value = values ? values[index] : Math.floor(Math.random() * alphabet.length);
-    return alphabet[value % alphabet.length];
-  }).join('');
-}
-
-function makeSecretKey() {
-  return `${makeCode(4)}-${makeCode(4)}-${makeCode(4)}`;
-}
-
-function getOrCreateClientId() {
-  const storageKey = 'property-hustle-client-id';
-  const persistentId = window.localStorage.getItem(storageKey);
-  if (persistentId) return persistentId;
-
-  const previousSessionId = window.sessionStorage.getItem(storageKey);
-  if (previousSessionId) {
-    window.localStorage.setItem(storageKey, previousSessionId);
-    return previousSessionId;
-  }
-
-  const clientId = `player-${makeCode(12).toLowerCase()}`;
-  window.localStorage.setItem(storageKey, clientId);
-  return clientId;
-}
-
-function getGameStateStorageKey(roomCode: string, playerId: string) {
-  return `${GAME_STATE_STORAGE_PREFIX}:${cleanRoomCode(roomCode)}:${playerId}`;
-}
-
-function buildJoinUrl(code: string) {
-  if (typeof window === 'undefined') return `property-hustle://join/${code}`;
-  return `${window.location.origin}/${cleanRoomCode(code)}`;
-}
-
-function buildLocalJoinUrl(code: string, secret: string) {
-  if (typeof window === 'undefined') {
-    return `/offline?room=${encodeURIComponent(cleanRoomCode(code))}&secret=${encodeURIComponent(secret)}`;
-  }
-  const url = new URL('/offline', window.location.origin);
-  url.searchParams.set('room', cleanRoomCode(code));
-  url.searchParams.set('secret', secret);
-  return url.toString();
-}
-
-function cleanRoomCode(value: string) {
-  return value.trim().replace(/[^a-z0-9]/gi, '').toUpperCase();
-}
-
-function roomSettingsSignature({
-  players,
-  bots,
-  difficulty,
-  rules
-}: {
-  players: number;
-  bots: number;
-  difficulty: Difficulty;
-  rules: RoomRules;
-}) {
-  return JSON.stringify({ players, bots, difficulty, rules });
-}
-
-function parseInvitePayload(value: string): ParsedInvite | null {
-  const rawValue = value.trim();
-  if (!rawValue) return null;
-
-  const lanMatch = rawValue.match(/^PH-LAN:([^:]+)(?::(.+))?$/i);
-  if (lanMatch) {
-    const code = cleanRoomCode(lanMatch[1]);
-    if (!code) return null;
-    return { code, mode: 'offline', secret: lanMatch[2]?.trim() };
-  }
-
-  try {
-    const base = typeof window === 'undefined' ? 'https://property-hustle.local' : window.location.origin;
-    const url = new URL(rawValue, base);
-    const queryCode = url.searchParams.get('room');
-    const queryMode = url.searchParams.get('mode')?.toLowerCase();
-    const querySecret = url.searchParams.get('secret')?.trim();
-
-    if (queryCode) {
-      const code = cleanRoomCode(queryCode);
-      if (!code) return null;
-      return {
-        code,
-        mode: queryMode === 'offline' || queryMode === 'lan' ? 'offline' : 'online',
-        secret: querySecret || undefined
-      };
-    }
-
-    const pathParts = url.pathname.split('/').filter(Boolean);
-    if (pathParts.length === 1) {
-      if (pathParts[0].toLowerCase() === 'offline') return null;
-      const code = cleanRoomCode(pathParts[0]);
-      if (code.length >= 4 && code.length <= 16) {
-        return { code, mode: 'online' };
-      }
-    }
-
-    if (url.protocol === 'property-hustle:' && url.hostname.toLowerCase() === 'join') {
-      const code = cleanRoomCode(url.pathname);
-      if (!code) return null;
-      return { code, mode: 'online' };
-    }
-  } catch {
-    // Fall back to bare room-code parsing below.
-  }
-
-  const bareCode = cleanRoomCode(rawValue);
-  if (bareCode.length >= 4 && bareCode.length <= 16) {
-    return { code: bareCode, mode: 'online' };
-  }
-
-  return null;
-}
-
-function toCardRect(rect: DOMRect): CardRect {
-  return {
-    left: rect.left,
-    top: rect.top,
-    width: rect.width,
-    height: rect.height
-  };
-}
-
-function getZoneForCard(card: GameCard): TableZone {
-  if (card.type === 'money') return 'bank';
-  if (card.type === 'property' || card.type === 'wild') return 'property';
-  if (card.actionKind === 'house' || card.actionKind === 'hotel') return 'property';
-  if (card.type === 'rent') return 'action';
-  return 'action';
-}
-
-function normalizePlayType(card: GameCard): CardType {
-  return card.type === 'wild' ? 'property' : card.type;
-}
-
-function getDistrictAccent(districtName: string) {
-  return districtSets.find((district) => district.name === districtName)?.accent ?? '#7b61ff';
-}
-
-function getWildcardBand(card: GameCard) {
-  if (card.type !== 'wild' || card.district !== 'Wildcard' || !card.wildDistricts?.length) {
-    return null;
-  }
-
-  const accents = card.wildDistricts.map(getDistrictAccent);
-  if (accents.length === 2) {
-    return `linear-gradient(90deg, ${accents[0]} 0 50%, ${accents[1]} 50% 100%)`;
-  }
-
-  const step = 100 / accents.length;
-  const stops = accents
-    .map((accent, index) => `${accent} ${index * step}% ${(index + 1) * step}%`)
-    .join(', ');
-
-  return `linear-gradient(90deg, ${stops})`;
-}
-
-function getCardStyle(card: GameCard, extra?: CSSProperties) {
-  const wildcardBand = getWildcardBand(card);
-
-  return {
-    ...extra,
-    '--accent': card.accent,
-    ...(wildcardBand ? { '--wild-band': wildcardBand } : {})
-  } as CSSProperties;
-}
-
-function getCompletedDistricts(cards: TableCard[], owner: string) {
-  return districtSets.filter((district) => {
-    const ownedCards = cards.filter(
-      (item) =>
-        item.zone === 'property' &&
-        item.owner === owner &&
-        item.card.district === district.name &&
-        item.playedAs === 'property'
-    );
-    return ownedCards.length >= district.size;
-  });
-}
-
-function getCompletedSetCount(cards: TableCard[], owner: string) {
-  return districtSets.reduce((total, district) => {
-    const ownedCards = cards.filter(
-      (item) =>
-        item.zone === 'property' &&
-        item.owner === owner &&
-        item.card.district === district.name &&
-        item.playedAs === 'property'
-    );
-    return total + Math.floor(ownedCards.length / district.size);
-  }, 0);
-}
-
-function getDistrictUpgrade(cards: TableCard[], owner: string, district: string, kind: 'house' | 'hotel') {
-  return cards.find(
-    (item) =>
-      item.owner === owner &&
-      item.zone === 'property' &&
-      item.card.district === district &&
-      item.card.actionKind === kind
-  );
-}
-
-function getEligibleUpgradeDistricts(
-  cards: TableCard[],
-  owner: string,
-  kind: 'house' | 'hotel'
-) {
-  return getCompletedDistricts(cards, owner).filter((district) => {
-    const hasHouse = Boolean(getDistrictUpgrade(cards, owner, district.name, 'house'));
-    const hasHotel = Boolean(getDistrictUpgrade(cards, owner, district.name, 'hotel'));
-    return kind === 'house' ? !hasHouse : hasHouse && !hasHotel;
-  });
-}
-
-function getCompleteSetTargets(cards: TableCard[], owner: string) {
-  const propertyCards = cards.filter((item) => item.zone === 'property');
-  const rivalDistricts = new Map<string, TableCard[]>();
-
-  propertyCards.forEach((item) => {
-    if (
-      item.owner === owner ||
-      item.playedAs !== 'property' ||
-      !item.card.district ||
-      item.card.district === 'Wildcard'
-    ) return;
-    const key = `${item.owner}:${item.card.district}`;
-    rivalDistricts.set(key, [...(rivalDistricts.get(key) ?? []), item]);
-  });
-
-  return Array.from(rivalDistricts.entries())
-    .filter(([, setCards]) => setCards.length >= (setCards[0]?.card.setSize ?? Number.POSITIVE_INFINITY))
-    .map(([key, setCards]) => {
-      const ownerName = setCards[0]?.owner ?? '';
-      const district = setCards[0]?.card.district ?? '';
-      const districtCards = propertyCards.filter(
-        (item) => item.owner === ownerName && item.card.district === district
-      );
-      return {
-        key,
-        owner: ownerName,
-        district,
-        count: setCards.length,
-        value: districtCards.reduce((sum, item) => sum + item.card.value, 0),
-        accent: setCards[0]?.card.accent ?? '#17212b',
-        hasHouse: Boolean(getDistrictUpgrade(cards, ownerName, district, 'house')),
-        hasHotel: Boolean(getDistrictUpgrade(cards, ownerName, district, 'hotel'))
-      };
-    });
-}
-
-function shuffleCards(cards: GameCard[]) {
-  const shuffled = [...cards];
-  for (let index = shuffled.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
-    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
-  }
-  return shuffled;
-}
-
-function makeDrawPile(cycle = makeCode(5)) {
-  return starterDeck.flatMap((card, cardIndex) =>
-    Array.from({ length: starterDeckCounts[card.id] ?? 1 }, (_, copyIndex) => ({
-      ...card,
-      id: `${card.id}-${cycle}-${copyIndex + 1}-${cardIndex + 1}`
-    }))
-  );
-}
-
-function drawWithRecycledPile({
-  pile,
-  count,
-  discardPile
-}: {
-  pile: GameCard[];
-  count: number;
-  discardPile: TableCard[];
-}) {
-  if (pile.length >= count) {
-    return {
-      drawn: pile.slice(0, count),
-      remaining: pile.slice(count),
-      discardPile,
-      recycled: false
-    };
-  }
-
-  const recycledCards = shuffleCards(discardPile.map((item) => item.card));
-  const replenishedPile = [...pile, ...recycledCards];
-
-  return {
-    drawn: replenishedPile.slice(0, count),
-    remaining: replenishedPile.slice(count),
-    discardPile: [],
-    recycled: recycledCards.length > 0
-  };
-}
-
-function chooseBestCover(cards: TableCard[], amount: number) {
-  if (amount <= 0) return { chosen: [] as TableCard[], total: 0 };
-
-  const choices = cards.reduce(
-    (totals, item) => {
-      const currentEntries = Array.from(totals.entries());
-      currentEntries.forEach(([total, chosen]) => {
-        const nextTotal = total + item.card.value;
-        const existing = totals.get(nextTotal);
-        const nextChosen = [...chosen, item];
-        if (!existing || nextChosen.length < existing.length) {
-          totals.set(nextTotal, nextChosen);
-        }
-      });
-      return totals;
-    },
-    new Map<number, TableCard[]>([[0, []]])
-  );
-
-  const best = Array.from(choices.entries())
-    .filter(([total]) => total >= amount)
-    .sort((left, right) => left[0] - right[0] || left[1].length - right[1].length)[0];
-
-  if (best) return { chosen: best[1], total: best[0] };
-
-  return {
-    chosen: cards,
-    total: cards.reduce((sum, item) => sum + item.card.value, 0)
-  };
-}
-
-function choosePaymentCards(cards: TableCard[], owner: string, amount: number) {
-  const bankCards = cards
-    .filter((item) => item.owner === owner && item.zone === 'bank' && item.card.value > 0)
-    .sort((left, right) => left.card.value - right.card.value);
-  const propertyCards = cards
-    .filter((item) => item.owner === owner && item.zone === 'property' && item.card.value > 0)
-    .sort((left, right) => left.card.value - right.card.value);
-
-  const bankTotal = bankCards.reduce((sum, item) => sum + item.card.value, 0);
-  if (bankTotal >= amount) {
-    return chooseBestCover(bankCards, amount);
-  }
-
-  const propertyPayment = chooseBestCover(propertyCards, amount - bankTotal);
-  return {
-    chosen: [...bankCards, ...propertyPayment.chosen],
-    total: bankTotal + propertyPayment.total
-  };
-}
-
-function getRivalOwnersWithPayableAssets(cards: TableCard[], owner: string) {
-  return Array.from(
-    new Set(
-      cards
-        .filter(
-          (item) =>
-            item.owner !== owner &&
-            (item.zone === 'bank' || item.zone === 'property') &&
-            item.card.value > 0
-        )
-        .map((item) => item.owner)
-    )
-  );
-}
-
-function getPayableAssetTotal(cards: TableCard[], owner: string) {
-  return cards
-    .filter(
-      (item) =>
-        item.owner === owner &&
-        (item.zone === 'bank' || item.zone === 'property') &&
-        item.card.value > 0
-    )
-    .reduce((total, item) => total + item.card.value, 0);
-}
-
-function chooseBotPayableTarget(cards: TableCard[], botOwner: string, difficulty: Difficulty = 'medium') {
-  const owners = getRivalOwnersWithPayableAssets(cards, botOwner);
-  if (owners.length === 0) return undefined;
-
-  const candidates = owners.map((owner) => ({
-    owner,
-    total: getPayableAssetTotal(cards, owner)
-  }));
-
-  const nonHumanCandidates = candidates.filter((candidate) => candidate.owner !== 'You');
-  const pool =
-    nonHumanCandidates.length > 0 && Math.random() < 0.6
-      ? nonHumanCandidates
-      : candidates;
-
-  if (difficulty === 'hard') {
-    const topTargets = [...pool]
-      .sort((left, right) => right.total - left.total)
-      .slice(0, Math.min(2, pool.length));
-    return topTargets[Math.floor(Math.random() * topTargets.length)]?.owner;
-  }
-
-  return pool[Math.floor(Math.random() * pool.length)]?.owner;
-}
-
-function canChargeRent(cards: TableCard[], owner: string) {
-  const ownsProperty = cards.some((item) => item.owner === owner && item.zone === 'property');
-  return ownsProperty && getRivalOwnersWithPayableAssets(cards, owner).length > 0;
-}
-
-function getLoosePropertiesForOwner(cards: TableCard[], owner: string) {
-  const propertyCards = cards.filter((item) => item.zone === 'property');
-  return propertyCards.filter((item) => {
-    if (
-      item.owner !== owner ||
-      item.playedAs !== 'property' ||
-      !item.card.district ||
-      item.card.district === 'Wildcard'
-    ) return false;
-
-    const districtCount = propertyCards.filter(
-      (candidate) =>
-        candidate.owner === item.owner &&
-        candidate.playedAs === 'property' &&
-        candidate.card.district === item.card.district
-    ).length;
-    return districtCount < (item.card.setSize ?? Number.POSITIVE_INFINITY);
-  });
-}
-
-function getLoosePropertyTargets(cards: TableCard[], owner: string) {
-  return Array.from(new Set(cards.map((item) => item.owner)))
-    .filter((candidateOwner) => candidateOwner !== owner)
-    .flatMap((candidateOwner) => getLoosePropertiesForOwner(cards, candidateOwner));
-}
-
-function getPaymentKey(item: TableCard) {
-  return `${item.owner}:${item.card.id}`;
-}
-
-function makeDiscardCard(card: GameCard, owner: string): TableCard {
-  return {
-    card,
-    zone: getZoneForCard(card),
-    playedAs: normalizePlayType(card),
-    owner
-  };
-}
+import {
+  buildJoinUrl,
+  buildLocalJoinUrl,
+  cleanRoomCode,
+  getGameStateStorageKey,
+  parseInvitePayload,
+  roomSettingsSignature
+} from '@/lib/rooms/utils';
+import { getOrCreateClientId, makeCode, makeSecretKey } from '@/lib/util/id';
 
 export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScreen?: Screen }) {
   const router = useRouter();
@@ -659,7 +129,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
   const [localKey, setLocalKey] = useState(INITIAL_LOCAL_KEY);
   const [localPlayerName, setLocalPlayerName] = useState('');
   const [localJoinKey, setLocalJoinKey] = useState('');
-  const [qr, setQr] = useState('');
+  const { qr, createQr } = useQrCode();
   const [rules, setRules] = useState<RoomRules>(defaultRules);
   const [players, setPlayers] = useState(4);
   const [bots, setBots] = useState(1);
@@ -683,7 +153,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
   const [turnLog, setTurnLog] = useState<string[]>([
     'Table is ready. Choose a card and make the first move.'
   ]);
-  const [toast, setToast] = useState<Toast | null>(null);
+  const { toast, showToast, dismissToast } = useToast();
   const [scannerOpen, setScannerOpen] = useState(false);
   const [confirmEndTurnOpen, setConfirmEndTurnOpen] = useState(false);
   const [cardFlights, setCardFlights] = useState<CardFlight[]>([]);
@@ -699,11 +169,13 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
   const [roomsCollapsed, setRoomsCollapsed] = useState(true);
   const [handCollapsed, setHandCollapsed] = useState(false);
   const [handSummaryCollapsed, setHandSummaryCollapsed] = useState({ board: false, bank: false });
+  const [handCanScroll, setHandCanScroll] = useState(false);
   const [playerPanelWidth, setPlayerPanelWidth] = useState(380);
   const [boardHeight, setBoardHeight] = useState(530);
   const [handPanelHeight, setHandPanelHeight] = useState(360);
   const handAutoOpenedRef = useRef(false);
   const [playerTargetPrompt, setPlayerTargetPrompt] = useState<PlayerTargetPrompt | null>(null);
+  const [streetSwapPrompt, setStreetSwapPrompt] = useState<StreetSwapPrompt | null>(null);
   const [rentTargetPrompt, setRentTargetPrompt] = useState<RentTargetPrompt | null>(null);
   const [setTargetPrompt, setSetTargetPrompt] = useState<SetTargetPrompt | null>(null);
   const [incomingActionPrompt, setIncomingActionPrompt] = useState<IncomingActionPrompt | null>(null);
@@ -713,6 +185,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
   const [paymentPrompt, setPaymentPrompt] = useState<PaymentPrompt | null>(null);
   const [discardPrompt, setDiscardPrompt] = useState<DiscardPrompt | null>(null);
   const [rulesGuideOpen, setRulesGuideOpen] = useState(false);
+  const [cardGuideOpen, setCardGuideOpen] = useState(false);
   const [confirmDiscardSettingsOpen, setConfirmDiscardSettingsOpen] = useState(false);
   const incomingActionResolveRef = useRef<((blocked: boolean) => void) | null>(null);
   const paymentContinueRef = useRef<(() => void) | null>(null);
@@ -837,6 +310,13 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
     });
   }, []);
 
+  const scrollPageFromFelt = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    if (event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+
+    event.preventDefault();
+    window.scrollBy({ top: event.deltaY, behavior: 'auto' });
+  }, []);
+
   useEffect(() => {
     setClientId(getOrCreateClientId());
     const localHostnames = ['localhost', '127.0.0.1', '::1'];
@@ -863,6 +343,33 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
   useEffect(() => {
     setBots((current) => Math.min(current, maxBotsForPlayers));
   }, [maxBotsForPlayers]);
+
+  useEffect(() => {
+    const scrollNode = handTargetRef.current;
+    if (!scrollNode || handCollapsed) {
+      setHandCanScroll(false);
+      return;
+    }
+
+    const updateCanScroll = () => {
+      setHandCanScroll(scrollNode.scrollWidth > scrollNode.clientWidth + 4);
+    };
+
+    updateCanScroll();
+
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updateCanScroll);
+      observer.observe(scrollNode);
+    }
+
+    window.addEventListener('resize', updateCanScroll);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updateCanScroll);
+    };
+  }, [hand.length, handCollapsed, handPanelHeight]);
 
   useEffect(() => {
     if (!clientId || !sharedRoom || sharedRoom.status !== 'playing') return;
@@ -1111,10 +618,6 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
     window.setTimeout(() => void audio.close(), 520);
   }, []);
 
-  const showToast = useCallback((title: string, body: string) => {
-    setToast({ id: Date.now(), title, body });
-  }, []);
-
   useEffect(() => {
     if (screen !== 'game' || winner) return;
 
@@ -1172,15 +675,6 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
     setScreen('offline');
     router.push('/offline');
   }, [router]);
-
-  const createQr = useCallback(async (payload: string) => {
-    const nextQr = await QRCode.toDataURL(payload, {
-      margin: 1,
-      width: 320,
-      color: { dark: '#17212b', light: '#ffffff' }
-    });
-    setQr(nextQr);
-  }, []);
 
   const animateCardTransfer = useCallback(
     (
@@ -1654,6 +1148,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
     setWinner(null);
     setDefendedOwners([]);
     setPlayerTargetPrompt(null);
+    setStreetSwapPrompt(null);
     setSetTargetPrompt(null);
     setWildcardPrompt(null);
     setUpgradePrompt(null);
@@ -1996,7 +1491,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
         if (targets.length > 0) {
           setPlayerTargetPrompt({
             action: selectedCard,
-            targetKeys: targets.map((item) => `${item.owner}:${item.card.id}`)
+            targetKeys: targets.map(getTableCardKey)
           });
           newLogs.unshift('Plot Grab is waiting for you to choose a loose rival property.');
         } else {
@@ -2004,22 +1499,16 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
           showToast('Plot Grab', 'No loose rival property is available yet.');
         }
       } else if (selectedCard.actionKind === 'swapProperty') {
-        const ownProperty = getLoosePropertiesForOwner(tableCards, playedBy)[0];
-        const rivalProperty = getLoosePropertyTargets(tableCards, playedBy)[0];
-        if (ownProperty && rivalProperty && !blockTargetedAction(rivalProperty.owner)) {
-          setTableCards((cards) =>
-            cards.map((item) => {
-              if (item.card.id === ownProperty.card.id && item.owner === ownProperty.owner) {
-                return { ...item, owner: rivalProperty.owner };
-              }
-              if (item.card.id === rivalProperty.card.id && item.owner === rivalProperty.owner) {
-                return { ...item, owner: playedBy };
-              }
-              return item;
-            })
-          );
-          newLogs.unshift(`Street Swap traded ${ownProperty.card.name} for ${rivalProperty.card.name}.`);
-          showToast('Street Swap', 'Property owners swapped.');
+        const ownTargets = getLoosePropertiesForOwner(tableCards, playedBy);
+        const rivalTargets = getLoosePropertyTargets(tableCards, playedBy);
+        if (ownTargets.length > 0 && rivalTargets.length > 0) {
+          setStreetSwapPrompt({
+            action: selectedCard,
+            actor: playedBy,
+            ownKeys: ownTargets.map(getTableCardKey),
+            rivalKeys: rivalTargets.map(getTableCardKey)
+          });
+          newLogs.unshift('Street Swap is waiting for you to choose both properties.');
         } else {
           newLogs.unshift('Street Swap needs one of your properties and one rival property.');
           showToast('Street Swap', 'No valid property pair is available yet.');
@@ -2081,6 +1570,10 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
 
   const assignWildcardDistrict = useCallback((districtName: string) => {
     if (!wildcardPrompt) return;
+    const allowedDistricts = wildcardPrompt.card.wildDistricts?.length
+      ? wildcardPrompt.card.wildDistricts
+      : districtSets.map((district) => district.name);
+    if (!allowedDistricts.includes(districtName)) return;
     const district = districtSets.find((item) => item.name === districtName);
     if (!district) return;
 
@@ -2318,6 +1811,49 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
     }
     setPlayerTargetPrompt(null);
   }, [animatePlayedCardsToOwner, defendedOwners, playerTargetPrompt, showToast, tableCards]);
+
+  const resolveStreetSwap = useCallback(() => {
+    if (!streetSwapPrompt?.selectedRivalKey || !streetSwapPrompt.selectedOwnKey) return;
+    const [rivalOwner, rivalId] = streetSwapPrompt.selectedRivalKey.split(':');
+    const [ownOwner, ownId] = streetSwapPrompt.selectedOwnKey.split(':');
+    if (ownOwner !== streetSwapPrompt.actor) return;
+
+    const rivalCard = tableCards.find((item) => item.owner === rivalOwner && item.card.id === rivalId);
+    const ownCard = tableCards.find((item) => item.owner === ownOwner && item.card.id === ownId);
+    if (!rivalCard || !ownCard) {
+      showToast('Street Swap', 'That swap is no longer available.');
+      setStreetSwapPrompt(null);
+      return;
+    }
+
+    if (defendedOwners.includes(rivalOwner)) {
+      setDefendedOwners((owners) => owners.filter((owner) => owner !== rivalOwner));
+      setTurnLog((entries) => [`${rivalOwner}'s Just Say No cancelled Street Swap.`, ...entries].slice(0, 40));
+      showToast('Action blocked', `${rivalOwner} used Just Say No.`);
+      setStreetSwapPrompt(null);
+      return;
+    }
+
+    const completeSwap = () => setTableCards((cards) =>
+      cards.map((item) => {
+        if (item.owner === ownOwner && item.card.id === ownId) {
+          return { ...item, owner: rivalOwner };
+        }
+        if (item.owner === rivalOwner && item.card.id === rivalId) {
+          return { ...item, owner: streetSwapPrompt.actor };
+        }
+        return item;
+      })
+    );
+
+    animatePlayedCardsToOwner([rivalCard], streetSwapPrompt.actor, completeSwap);
+    setTurnLog((entries) => [
+      `Street Swap traded ${ownCard.card.name} to ${rivalOwner} for ${rivalCard.card.name}.`,
+      ...entries
+    ].slice(0, 40));
+    showToast('Street Swap', `Swapped ${ownCard.card.name} for ${rivalCard.card.name}.`);
+    setStreetSwapPrompt(null);
+  }, [animatePlayedCardsToOwner, defendedOwners, showToast, streetSwapPrompt, tableCards]);
 
   const resolveSetTarget = useCallback((targetKey: string) => {
     if (!setTargetPrompt) return;
@@ -3173,6 +2709,12 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
         return;
       }
 
+      if (cardGuideOpen) {
+        event.preventDefault();
+        setCardGuideOpen(false);
+        return;
+      }
+
       if (scannerOpen) {
         event.preventDefault();
         setScannerOpen(false);
@@ -3188,6 +2730,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
+    cardGuideOpen,
     confirmDiscardSettingsOpen,
     requestCloseSettingsPanel,
     rulesGuideOpen,
@@ -3206,250 +2749,100 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
             settingsAvailable={Boolean(sharedRoom) && !roomHasStarted && roomRole === 'host'}
             onHome={navigateHome}
             onRules={() => setRulesGuideOpen(true)}
+            onCards={() => setCardGuideOpen(true)}
             onSettings={() => setScreen('settings')}
           />
         )}
 
         {screen === 'dashboard' && (
-          <section className={`dashboard-grid ${roomsCollapsed ? '' : 'rooms-expanded'}`}>
-            <div className="dashboard-main">
-              <div className="surface command-center">
-                <button
-                  className="command-rules-button"
-                  onClick={() => setRulesGuideOpen(true)}
-                  aria-label="Open game rules"
-                  title="Game rules"
-                >
-                  <BookOpen size={21} />
-                </button>
-                <div className="section-kicker">Table launcher</div>
-                <h1>Property Hustle</h1>
-                <p className="lead">
-                  A fast private card battler with original property, cash, action, defense, and
-                  wildcard cards.
-                </p>
-
-                <div className="mode-grid">
-
-                  <ModeTile
-                    icon={<WifiOff size={22} />}
-                    title="Play Offline"
-                    body="Connect devices via hotspot"
-                    onClick={navigateOffline}
-                  />
-
-                  <ModeTile
-                    icon={<Bot size={22} />}
-                    title="Play against bots"
-                    body="Easy, medium, hard opponents"
-                    onClick={() => void openRoom('bots', 4, 3)}
-                  />
-
-                  <ModeTile
-                    icon={<Wifi size={22} />}
-                    title="Play online"
-                    body="Create a private room"
-                    onClick={() => setScreen('settings')}
-                  />
-
-                </div>
-              </div>
-
-              <ActiveRoomsPanel
-                rooms={activeRooms}
-                collapsed={roomsCollapsed}
-                onCollapsedChange={setRoomsCollapsed}
-                allowDelete={localMaintenance}
-                onDelete={deleteLocalRoom}
-                onJoin={(room) => void joinActiveRoom(room)}
-              />
-            </div>
-
-            <RoomComposer
-              players={players}
-              bots={bots}
-              difficulty={difficulty}
-              rules={rules}
-              onPlayers={updatePlayers}
-              onBots={updateBots}
-              onDifficulty={setDifficulty}
-              onRules={setRules}
-              onCreate={() => void openRoom('online')}
-              onClose={() => setScreen('dashboard')}
-              editingRoom={false}
-            />
-          </section>
+          <DashboardScreen
+            roomsCollapsed={roomsCollapsed}
+            activeRooms={activeRooms}
+            localMaintenance={localMaintenance}
+            players={players}
+            bots={bots}
+            difficulty={difficulty}
+            rules={rules}
+            onOpenRules={() => setRulesGuideOpen(true)}
+            onOpenCards={() => setCardGuideOpen(true)}
+            onPlayOffline={navigateOffline}
+            onPlayBots={() => void openRoom('bots', 4, 3)}
+            onPlayOnline={() => setScreen('settings')}
+            onRoomsCollapsedChange={setRoomsCollapsed}
+            onDeleteRoom={deleteLocalRoom}
+            onJoinRoom={(room) => void joinActiveRoom(room)}
+            onPlayers={updatePlayers}
+            onBots={updateBots}
+            onDifficulty={setDifficulty}
+            onRules={setRules}
+            onCreate={() => void openRoom('online')}
+            onClose={() => setScreen('dashboard')}
+          />
         )}
 
         {screen === 'settings' && (
-          <section className="two-column">
-            <RoomComposer
-              players={players}
-              bots={bots}
-              difficulty={difficulty}
-              rules={rules}
-              onPlayers={updatePlayers}
-              onBots={updateBots}
-              onDifficulty={setDifficulty}
-              onRules={setRules}
-              onCreate={sharedRoom ? () => void updateCurrentRoom() : () => void openRoom('online')}
-              onClose={requestCloseSettingsPanel}
-              editingRoom={Boolean(sharedRoom)}
-              expanded
-            />
-
-            <div className="surface rule-preview">
-              <div className="section-kicker">Room profile</div>
-              <h2>{playStyleLabels[rules.playStyle]} table</h2>
-              <div className="rule-list">
-                <RuleLine active icon={<Users size={18} />} label={`${players} seats`} />
-                <RuleLine active={bots > 0} icon={<Bot size={18} />} label={`${bots} bot seats`} />
-                <RuleLine active={rules.allowTeamDefense} icon={<Shield size={18} />} label="Team defense" />
-                <RuleLine active={rules.chainBlocks} icon={<Zap size={18} />} label="Chain blocks" />
-                <RuleLine active={rules.autoSkip} icon={<Timer size={18} />} label="Auto skip" />
-                <RuleLine active icon={<Volume2 size={18} />} label={`${rules.reminderEverySeconds}s reminder`} />
-              </div>
-            </div>
-          </section>
+          <SettingsScreen
+            players={players}
+            bots={bots}
+            difficulty={difficulty}
+            rules={rules}
+            editingRoom={Boolean(sharedRoom)}
+            onPlayers={updatePlayers}
+            onBots={updateBots}
+            onDifficulty={setDifficulty}
+            onRules={setRules}
+            onCreate={sharedRoom ? () => void updateCurrentRoom() : () => void openRoom('online')}
+            onClose={requestCloseSettingsPanel}
+          />
         )}
 
         {screen === 'lobby' && (
-          <section className="lobby-layout">
-            <div className="surface invite-panel">
-              <div className="section-kicker">{modeCopy[roomMode].title}</div>
-              <div className="room-code">{code}</div>
-              <p className="lead compact">{modeCopy[roomMode].body}</p>
-
-              {(roomJoinMessage || roomRole === 'member' || isSpectator) && (
-                <div className={`lobby-notice ${roomJoinMessage || isSpectator ? 'blocked' : ''}`}>
-                  <strong>
-                    {isSpectator ? 'Spectator access' : roomJoinMessage ? 'No seat added' : 'Joined as a player'}
-                  </strong>
-                  <span>
-                    {isSpectator
-                      ? 'This game is already underway. You can watch, but cannot play cards.'
-                      : roomJoinMessage || 'Your seat is reserved. The host controls when the game starts.'}
-                  </span>
-                </div>
-              )}
-
-              <div className="invite-actions">
-                <button
-                  className="primary-button"
-                  onClick={roomHasStarted ? enterStartedGame : startGame}
-                  disabled={!roomHasStarted && (!canStartGame || (canStartGame && !hasMinimumPlayers))}
-                >
-                  <Play size={18} />
-                  {roomHasStarted
-                    ? isSpectator
-                      ? 'Watch game'
-                      : 'Continue game'
-                    : canStartGame
-                      ? hasMinimumPlayers
-                        ? 'Start game'
-                        : 'Need 2 players'
-                      : roomIsFull
-                        ? 'Room full'
-                        : 'Waiting for host'}
-                </button>
-                <button className="ghost-button" onClick={copyInvite}>
-                  <Copy size={18} />
-                  Copy invite
-                </button>
-              </div>
-
-              <div className="room-meta">
-                <MetaPill icon={<Users size={16} />} label={`${occupiedSeats}/${players} seats`} />
-                <MetaPill icon={<Bot size={16} />} label={`${bots} bots`} />
-                <MetaPill icon={<Settings2 size={16} />} label={playStyleLabels[rules.playStyle]} />
-                <MetaPill icon={<Timer size={16} />} label={`${rules.turnSeconds}s turns`} />
-              </div>
-            </div>
-
-            <div className="surface qr-panel">
-              <div className="qr-card">{qr ? <img src={qr} alt="Room QR code" /> : <QrCode size={132} />}</div>
-              <button className="scanner-button" onClick={() => setScannerOpen(true)}>
-                <ScanLine size={18} />
-                Open scanner
-              </button>
-              <div>
-                <div className="section-kicker">{roomMode === 'offline' ? 'LAN secret key' : 'Join link'}</div>
-                <p className="secret-key">{roomMode === 'offline' ? localKey : joinLink || buildJoinUrl(code)}</p>
-              </div>
-            </div>
-
-            <SeatList
-              players={lobbyPlayers}
-              activeIndex={-1}
-              onRemove={
-                roomRole === 'host' && sharedRoom?.status === 'lobby'
-                  ? (player) => void removeLobbyPlayer(player)
-                  : undefined
-              }
-              canRemove={(player) =>
-                player.cards > 0 &&
-                player.id !== clientId &&
-                !sharedRoom?.members.find((member) => member.id === player.id)?.isHost
-              }
-            />
-          </section>
+          <LobbyScreen
+            roomMode={roomMode}
+            code={code}
+            roomJoinMessage={roomJoinMessage}
+            roomRole={roomRole}
+            isSpectator={isSpectator}
+            roomHasStarted={roomHasStarted}
+            canStartGame={canStartGame}
+            hasMinimumPlayers={hasMinimumPlayers}
+            roomIsFull={roomIsFull}
+            occupiedSeats={occupiedSeats}
+            players={players}
+            bots={bots}
+            rules={rules}
+            qr={qr}
+            localKey={localKey}
+            joinLink={joinLink}
+            lobbyPlayers={lobbyPlayers}
+            onPrimaryAction={() => {
+              if (roomHasStarted) enterStartedGame();
+              else void startGame();
+            }}
+            onCopyInvite={() => void copyInvite()}
+            onOpenScanner={() => setScannerOpen(true)}
+            onRemovePlayer={
+              roomRole === 'host' && sharedRoom?.status === 'lobby'
+                ? (player) => void removeLobbyPlayer(player)
+                : undefined
+            }
+            canRemovePlayer={(player) =>
+              player.cards > 0 &&
+              player.id !== clientId &&
+              !sharedRoom?.members.find((member) => member.id === player.id)?.isHost
+            }
+          />
         )}
 
         {screen === 'offline' && (
-          <section className="offline-layout">
-            <div className="surface offline-host">
-              <div className="section-kicker">Offline nearby</div>
-              <h2>Host from one device</h2>
-              <p className="lead compact">
-                Create a local table token, connect everyone to the same hotspot, then join with the
-                QR or secret key.
-              </p>
-
-              <div className="lan-grid">
-                <div className="lan-step">
-                  <Smartphone size={22} />
-                  <span>Host device</span>
-                </div>
-                <div className="lan-step">
-                  <Radio size={22} />
-                  <span>Hotspot</span>
-                </div>
-                <div className="lan-step">
-                  <KeyRound size={22} />
-                  <span>Secret key</span>
-                </div>
-              </div>
-
-              <button className="primary-button wide" onClick={() => void openRoom('offline')}>
-                <WifiOff size={18} />
-                Create local table
-              </button>
-            </div>
-
-            <div className="surface join-panel">
-              <div className="section-kicker">Join local table</div>
-              <label className="text-field">
-                <span>Player name</span>
-                <input
-                  value={localPlayerName}
-                  onChange={(event) => setLocalPlayerName(event.target.value)}
-                  placeholder="Type your player name"
-                />
-              </label>
-              <label className="text-field">
-                <span>Secret key</span>
-                <input
-                  value={localJoinKey}
-                  onChange={(event) => setLocalJoinKey(event.target.value.toUpperCase())}
-                  placeholder="ABCD-1234-WXYZ or PH-LAN invite"
-                />
-              </label>
-              <button className="ghost-button wide" onClick={() => void joinLocalTable()}>
-                <ChevronRight size={18} />
-                Join with key
-              </button>
-            </div>
-          </section>
+          <OfflineScreen
+            localPlayerName={localPlayerName}
+            localJoinKey={localJoinKey}
+            onLocalPlayerNameChange={setLocalPlayerName}
+            onLocalJoinKeyChange={setLocalJoinKey}
+            onCreateLocalTable={() => void openRoom('offline')}
+            onJoinLocalTable={() => void joinLocalTable()}
+          />
         )}
 
         {screen === 'game' && (
@@ -3482,7 +2875,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
               ref={tableGridRef}
               style={{ '--player-panel-width': `${playerPanelWidth}px`, '--board-height': `${boardHeight}px` } as CSSProperties}
             >
-              <div className="felt-table" ref={feltTableRef}>
+              <div className="felt-table" ref={feltTableRef} onWheel={scrollPageFromFelt}>
                 <TablePlayerLayout
                   players={tablePlayers}
                   activeIndex={currentPlayerIndex}
@@ -3584,7 +2977,7 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
                 </div>
               </div>}
 
-              {!handCollapsed && <div className={`hand-scroll-wrap ${hand.length > 4 ? 'can-scroll' : ''}`}>
+              {!handCollapsed && <div className={`hand-scroll-wrap ${handCanScroll ? 'can-scroll' : ''}`}>
                 <div className={`hand-scroll ${isCardAnimating ? 'animating' : ''}`} ref={handTargetRef}>
                   {hand.map((card) => (
                     <button
@@ -3635,68 +3028,24 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
         {rulesGuideOpen && (
           <RulesGuide rules={rules} onClose={() => setRulesGuideOpen(false)} />
         )}
+        {cardGuideOpen && <CardGuide onClose={() => setCardGuideOpen(false)} />}
         {confirmDiscardSettingsOpen && (
           <ConfirmDiscardSettings
             onCancel={() => setConfirmDiscardSettingsOpen(false)}
             onConfirm={discardSettingsChanges}
           />
         )}
-        {toast && <TurnToast key={toast.id} toast={toast} onDismiss={() => setToast(null)} />}
+        {toast && <TurnToast key={toast.id} toast={toast} onDismiss={dismissToast} />}
         {scannerOpen && <ScannerPanel onClose={() => setScannerOpen(false)} onJoin={handleScannerJoin} />}
         {discardPrompt && (
-          <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Discard extra cards">
-            <div className="confirm-sheet discard-sheet">
-              <div className="section-kicker">Hand limit</div>
-              <h2>Discard {discardPrompt.count} card{discardPrompt.count === 1 ? '' : 's'}</h2>
-              <p>
-                You can only keep {MAX_HAND_SIZE} cards at the end of your turn. Choose what to throw into the
-                discard pile.
-              </p>
-              <div className="discard-counter">
-                <span>Selected</span>
-                <strong>{discardPrompt.selectedIds.length}/{discardPrompt.count}</strong>
-              </div>
-              <div className="discard-card-grid">
-                {hand.map((card) => {
-                  const isSelected = discardPrompt.selectedIds.includes(card.id);
-                  const isLocked = !isSelected && discardPrompt.selectedIds.length >= discardPrompt.count;
-
-                  return (
-                    <button
-                      className={`discard-choice-card ${isSelected ? 'selected' : ''}`}
-                      disabled={isLocked}
-                      key={card.id}
-                      onClick={() => toggleDiscardCard(card.id)}
-                      style={{ '--accent': card.accent } as CSSProperties}
-                    >
-                      {isSelected && (
-                        <span className="discard-selected-mark">
-                          <Check size={16} />
-                        </span>
-                      )}
-                      <small>{card.type}</small>
-                      <strong>{card.name}</strong>
-                      {card.district && card.district !== 'Wildcard' && <em>{card.district}</em>}
-                      <span>{card.value}M</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="confirm-actions">
-                <button className="ghost-button" onClick={() => setDiscardPrompt(null)}>
-                  Keep choosing
-                </button>
-                <button
-                  className="primary-button"
-                  disabled={discardPrompt.selectedIds.length !== discardPrompt.count}
-                  onClick={confirmDiscardCards}
-                >
-                  <Trash2 size={18} />
-                  Discard selected
-                </button>
-              </div>
-            </div>
-          </div>
+          <DiscardPromptDialog
+            prompt={discardPrompt}
+            hand={hand}
+            maxHandSize={MAX_HAND_SIZE}
+            onToggleCard={toggleDiscardCard}
+            onClose={() => setDiscardPrompt(null)}
+            onConfirm={confirmDiscardCards}
+          />
         )}
         {confirmEndTurnOpen && (
           <ConfirmEndTurn
@@ -3709,287 +3058,64 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
           />
         )}
         {rentTargetPrompt && (
-          <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Choose rent target">
-            <div className="confirm-sheet action-choice-sheet">
-              <div className="section-kicker">Rent Rush</div>
-              <h2>Choose who pays</h2>
-              <p>Bank money is paid first. Properties are only used if the bank cannot cover the bill.</p>
-              {rentTargetPrompt.doubleRentCardId && (
-                <button
-                  className={`double-rent-toggle ${rentTargetPrompt.useDoubleRent ? 'active' : ''}`}
-                  onClick={toggleRentDouble}
-                  type="button"
-                >
-                  <span>
-                    <strong>Double Up</strong>
-                    <small>Use 1 extra play to charge {rentTargetPrompt.action.value * 2}M.</small>
-                  </span>
-                  <b>{rentTargetPrompt.useDoubleRent ? 'On' : 'Off'}</b>
-                </button>
-              )}
-              <div className="action-target-grid">
-                {rentTargetPrompt.targetOwners.map((owner) => {
-                  const ownerBank = tableCards
-                    .filter((item) => item.owner === owner && item.zone === 'bank')
-                    .reduce((total, item) => total + item.card.value, 0);
-                  const ownerProperty = tableCards
-                    .filter((item) => item.owner === owner && item.zone === 'property')
-                    .reduce((total, item) => total + item.card.value, 0);
-                  return (
-                    <button
-                      className="action-target-card"
-                      key={owner}
-                      onClick={() => resolveRentTarget(owner)}
-                      style={{ '--accent': rentTargetPrompt.action.accent } as CSSProperties}
-                    >
-                      <small>Rival</small>
-                      <strong>{owner}</strong>
-                      <span>{ownerBank}M bank - {ownerProperty}M property</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+          <RentTargetPromptDialog
+            prompt={rentTargetPrompt}
+            tableCards={tableCards}
+            onToggleDouble={toggleRentDouble}
+            onResolve={resolveRentTarget}
+          />
         )}
         {playerTargetPrompt && (
-          <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Choose a property">
-            <div className="confirm-sheet action-choice-sheet">
-              <div className="section-kicker">Plot Grab</div>
-              <h2>Choose a property to take</h2>
-              <p>Select any loose property currently owned by a rival.</p>
-              <div className="action-target-grid">
-                {tableCards
-                  .filter((item) => playerTargetPrompt.targetKeys.includes(`${item.owner}:${item.card.id}`))
-                  .map((item) => (
-                    <button
-                      className="action-target-card"
-                      key={`${item.owner}-${item.card.id}`}
-                      onClick={() => resolvePlayerTarget(`${item.owner}:${item.card.id}`)}
-                      style={{ '--accent': item.card.accent } as CSSProperties}
-                    >
-                      <small>{item.owner}</small>
-                      <strong>{item.card.name}</strong>
-                      <span>{item.card.value}M</span>
-                    </button>
-                  ))}
-              </div>
-            </div>
-          </div>
+          <PlayerTargetPromptDialog
+            prompt={playerTargetPrompt}
+            tableCards={tableCards}
+            onResolve={resolvePlayerTarget}
+          />
+        )}
+        {streetSwapPrompt && (
+          <StreetSwapPromptDialog
+            prompt={streetSwapPrompt}
+            tableCards={tableCards}
+            onSelectRival={(key) =>
+              setStreetSwapPrompt((prompt) => (prompt ? { ...prompt, selectedRivalKey: key } : prompt))
+            }
+            onSelectOwn={(key) =>
+              setStreetSwapPrompt((prompt) => (prompt ? { ...prompt, selectedOwnKey: key } : prompt))
+            }
+            onClose={() => setStreetSwapPrompt(null)}
+            onResolve={resolveStreetSwap}
+          />
         )}
         {setTargetPrompt && (
-          <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Choose a complete set">
-            <div className="confirm-sheet action-choice-sheet">
-              <div className="section-kicker">Deal Breaker</div>
-              <h2>Choose a complete district</h2>
-              <p>Select which rival set you want to take. Any Block Works or Skyline Landmark on that set comes with it.</p>
-              <div className="action-target-grid">
-                {setTargetPrompt.targets.map((target) => (
-                  <button
-                    className="action-target-card set-target-card"
-                    key={target.key}
-                    onClick={() => resolveSetTarget(target.key)}
-                    style={{ '--accent': target.accent } as CSSProperties}
-                  >
-                    <small>{target.owner}</small>
-                    <strong>{target.district}</strong>
-                    <span>{target.count} cards - {target.value}M</span>
-                    {(target.hasHouse || target.hasHotel) && (
-                      <em>
-                        {target.hasHouse ? 'Block Works' : ''}
-                        {target.hasHouse && target.hasHotel ? ' + ' : ''}
-                        {target.hasHotel ? 'Skyline Landmark' : ''}
-                      </em>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          <SetTargetPromptDialog prompt={setTargetPrompt} onResolve={resolveSetTarget} />
         )}
         {wildcardPrompt && (
-          <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Choose wildcard color">
-            <div className="confirm-sheet wildcard-choice-sheet">
-              <div className="section-kicker">Wildcard Lease</div>
-              <h2>Choose a district color</h2>
-              <p>The wildcard will count toward the selected property set.</p>
-              <div className="wildcard-district-grid">
-                {districtSets.map((district) => {
-                  const currentCount = propertyCards.filter(
-                    (item) =>
-                      item.owner === wildcardPrompt.owner &&
-                      item.card.district === district.name
-                  ).length;
-                  return (
-                    <button
-                      className="wildcard-district-button"
-                      key={district.name}
-                      onClick={() => assignWildcardDistrict(district.name)}
-                      style={{ '--accent': district.accent } as CSSProperties}
-                    >
-                      <span className="wildcard-color-swatch" />
-                      <strong>{district.name}</strong>
-                      <small>{currentCount}/{district.size} played</small>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+          <WildcardPromptDialog
+            prompt={wildcardPrompt}
+            propertyCards={propertyCards}
+            onAssign={assignWildcardDistrict}
+          />
         )}
         {upgradePrompt && (
-          <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Choose a district to upgrade">
-            <div className="confirm-sheet wildcard-choice-sheet">
-              <div className="section-kicker">
-                {upgradePrompt.kind === 'house' ? 'District development' : 'District landmark'}
-              </div>
-              <h2>Choose a complete district</h2>
-              <p>
-                {upgradePrompt.kind === 'house'
-                  ? 'Block Works can only be added to a complete district.'
-                  : 'Skyline Landmark requires a complete district that already has Block Works.'}
-              </p>
-              <div className="wildcard-district-grid">
-                {districtSets
-                  .filter((district) => upgradePrompt.districtNames.includes(district.name))
-                  .map((district) => (
-                    <button
-                      className="wildcard-district-button"
-                      key={district.name}
-                      onClick={() => assignUpgradeDistrict(district.name)}
-                      style={{ '--accent': district.accent } as CSSProperties}
-                    >
-                      <span className="wildcard-color-swatch" />
-                      <strong>{district.name}</strong>
-                      <small>
-                        {upgradePrompt.kind === 'house' ? '+3M development' : '+4M landmark'}
-                      </small>
-                    </button>
-                  ))}
-              </div>
-            </div>
-          </div>
+          <UpgradePromptDialog prompt={upgradePrompt} onAssign={assignUpgradeDistrict} />
         )}
-        {paymentPrompt && (() => {
-          const availableAssets = tableCards.filter(
-            (item) =>
-              item.owner === paymentPrompt.payer &&
-              (item.zone === 'bank' || item.zone === 'property') &&
-              item.card.value > 0
-          );
-          const bankAssets = availableAssets.filter((item) => item.zone === 'bank');
-          const propertyAssets = availableAssets.filter((item) => item.zone === 'property');
-          const bankTotal = availableAssets
-            .filter((item) => item.zone === 'bank')
-            .reduce((total, item) => total + item.card.value, 0);
-          const bankCoversPayment = bankTotal >= paymentPrompt.amount;
-          const visibleAssets =
-            bankAssets.length === 0
-              ? propertyAssets
-              : bankCoversPayment
-                ? bankAssets
-                : availableAssets;
-          const selectedTotal = availableAssets
-            .filter((item) =>
-              paymentPrompt.selectedKeys.includes(getPaymentKey(item))
-            )
-            .reduce((total, item) => total + item.card.value, 0);
-          const totalAssets = availableAssets.reduce((total, item) => total + item.card.value, 0);
-
-          return (
-            <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Choose payment cards">
-              <div className="confirm-sheet payment-sheet">
-                <div className="section-kicker">Payment required</div>
-                <h2>Pay {paymentPrompt.amount}M</h2>
-                <p>
-                  Choose bank cards or properties to give {paymentPrompt.payee}. No change is returned.
-                </p>
-                <div className="payment-total">
-                  <span>Selected</span>
-                  <strong>{selectedTotal}M / {paymentPrompt.amount}M</strong>
-                </div>
-                <div className="payment-card-grid">
-                  {visibleAssets.map((item) => {
-                    const paymentKey = getPaymentKey(item);
-                    const selected = paymentPrompt.selectedKeys.includes(paymentKey);
-                    const forced = paymentPrompt.forcedKeys.includes(paymentKey);
-                    const disabled = forced;
-                    return (
-                      <button
-                        className={`payment-card ${selected ? 'selected' : ''} ${forced ? 'forced' : ''}`}
-                        key={paymentKey}
-                        onClick={() => togglePaymentCard(paymentKey)}
-                        disabled={disabled}
-                        style={{ '--accent': item.card.accent } as CSSProperties}
-	                      >
-	                        {selected && (
-	                          <span className="payment-selected-mark" aria-hidden="true">
-	                            <Check size={16} />
-	                          </span>
-	                        )}
-	                        <small>
-	                          {selected ? 'selected' : forced ? 'money first' : item.zone}
-	                        </small>
-	                        <strong>{item.card.name}</strong>
-	                        <span>{item.card.value}M</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="confirm-actions">
-                  {paymentBlockPrompt && hand.some((card) => card.actionKind === 'block') && (
-                    <button
-                      className="ghost-button"
-                      onClick={playBlockFromPayment}
-                    >
-                      <Shield size={18} />
-                      Play Just Say No instead
-                    </button>
-                  )}
-                  <button
-                    className="primary-button"
-                    onClick={confirmPayment}
-                    disabled={selectedTotal < paymentPrompt.amount && selectedTotal < totalAssets}
-                  >
-                    Pay {selectedTotal}M
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        {paymentPrompt && (
+          <PaymentPromptDialog
+            prompt={paymentPrompt}
+            tableCards={tableCards}
+            hand={hand}
+            canPlayBlock={Boolean(paymentBlockPrompt)}
+            onToggleCard={togglePaymentCard}
+            onPlayBlock={playBlockFromPayment}
+            onConfirm={confirmPayment}
+          />
+        )}
         {incomingActionPrompt && (
-          <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Incoming action">
-            <div className="confirm-sheet incoming-action-sheet">
-              <div className="section-kicker">Action against you</div>
-              <div
-                className="incoming-action-card"
-                style={{ '--accent': incomingActionPrompt.action.accent } as CSSProperties}
-              >
-                <small>{incomingActionPrompt.actor} played</small>
-                <strong>{incomingActionPrompt.action.name}</strong>
-                <p>{incomingActionPrompt.action.text}</p>
-                <span>{incomingActionPrompt.action.value}M</span>
-              </div>
-              <div className="confirm-actions">
-                {hand.some((card) => card.actionKind === 'block') && (
-                  <button
-                    className="ghost-button"
-                    onClick={() => incomingActionResolveRef.current?.(true)}
-                  >
-                    <Shield size={18} />
-                    Play Just Say No
-                  </button>
-                )}
-                <button
-                  className="primary-button"
-                  onClick={() => incomingActionResolveRef.current?.(false)}
-                >
-                  Accept action
-                </button>
-              </div>
-            </div>
-          </div>
+          <IncomingActionPromptDialog
+            prompt={incomingActionPrompt}
+            hand={hand}
+            onResolve={(blocked) => incomingActionResolveRef.current?.(blocked)}
+          />
         )}
         {winner && (
           <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Game over">
@@ -4042,1448 +3168,5 @@ export default function HomeScreen({ initialScreen = 'dashboard' }: { initialScr
         )}
       </div>
     </main>
-  );
-}
-
-function ActiveRoomsPanel({
-  rooms,
-  collapsed,
-  onCollapsedChange,
-  allowDelete,
-  onDelete,
-  onJoin
-}: {
-  rooms: ActiveRoom[];
-  collapsed: boolean;
-  onCollapsedChange: (collapsed: boolean) => void;
-  allowDelete: boolean;
-  onDelete: (room: ActiveRoom) => Promise<void>;
-  onJoin: (room: ActiveRoom) => void;
-}) {
-  const [filter, setFilter] = useState<RoomFilter>('all');
-  const [search, setSearch] = useState('');
-  const [pendingDeleteRoom, setPendingDeleteRoom] = useState<ActiveRoom | null>(null);
-  const joinableCount = rooms.filter((room) => room.status === 'lobby' && room.playerCount < room.maxPlayers).length;
-
-  useEffect(() => {
-    if (rooms.length === 0 && !collapsed) {
-      onCollapsedChange(true);
-    }
-  }, [collapsed, onCollapsedChange, rooms.length]);
-
-  const filteredRooms = rooms.filter((room) => {
-    const joinable = room.status === 'lobby' && room.playerCount < room.maxPlayers;
-    const matchesFilter =
-      filter === 'all' ||
-      (filter === 'joinable' && joinable) ||
-      (filter === 'mine' && room.myRoom) ||
-      room.mode === filter;
-    const query = search.trim().toLowerCase();
-    const matchesSearch =
-      !query ||
-      room.code.toLowerCase().includes(query) ||
-      room.title.toLowerCase().includes(query) ||
-      room.host.toLowerCase().includes(query);
-
-    return matchesFilter && matchesSearch;
-  });
-
-  return (
-    <section className={`surface active-rooms-panel ${collapsed ? 'collapsed' : ''}`}>
-      <div className="active-rooms-header">
-        <div>
-          <div className="section-kicker">Active rooms</div>
-          <h2>Join a table</h2>
-          <p className="active-rooms-summary">
-            {joinableCount} joinable - {rooms.length} active
-          </p>
-        </div>
-        <div className="active-rooms-controls">
-          {!collapsed && (
-            <label className="room-search">
-              <Search size={17} />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Code, host, room"
-              />
-            </label>
-          )}
-          <button
-            className="collapse-button"
-            onClick={() => rooms.length > 0 && onCollapsedChange(!collapsed)}
-            disabled={rooms.length === 0}
-            aria-expanded={!collapsed}
-            aria-controls="active-rooms-body"
-          >
-            <ChevronRight size={18} />
-            <span>{rooms.length === 0 ? 'No rooms' : collapsed ? 'Show' : 'Hide'}</span>
-          </button>
-        </div>
-      </div>
-
-      {!collapsed && (
-        <div className="active-rooms-body" id="active-rooms-body">
-          <div className="room-filter-row" aria-label="Room filters">
-            <Filter size={16} />
-            {roomFilters.map((item) => (
-              <button
-                className={filter === item.id ? 'active' : ''}
-                key={item.id}
-                onClick={() => setFilter(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="active-room-list">
-            {filteredRooms.length === 0 ? (
-              <p className="empty-rooms">No rooms match that filter.</p>
-            ) : (
-              filteredRooms.map((room) => {
-                const joinable = room.status === 'lobby' && room.playerCount < room.maxPlayers;
-                const actionLabel = room.myRoom ? 'Open' : joinable ? 'Join' : 'View';
-
-                return (
-                  <article
-                    className="active-room-card"
-                    key={`${room.myRoom ? 'mine' : room.host}-${room.code}-${room.title}`}
-                  >
-                    <div className={`room-mode-mark ${room.mode}`}>
-                      {room.mode === 'online' && <Wifi size={18} />}
-                      {room.mode === 'offline' && <Radio size={18} />}
-                      {room.mode === 'bots' && <Bot size={18} />}
-                    </div>
-                    <div className="room-card-main">
-                      <div className="room-card-title">
-                        <strong>{room.title}</strong>
-                        <span>{room.code}</span>
-                      </div>
-                      <div className="room-card-meta">
-                        <span>{room.host}</span>
-                        <span>{room.playerCount}/{room.maxPlayers} seats</span>
-                        <span>{playStyleLabels[room.playStyle]}</span>
-                        {room.bots > 0 && <span>{room.bots} bots</span>}
-                      </div>
-                    </div>
-                    <div className="room-card-side">
-                      <span className={`room-status ${joinable ? 'joinable' : room.status}`}>
-                        {joinable ? 'Joinable' : room.status}
-                      </span>
-                      <div className="room-card-buttons">
-                        <button className="ghost-button" onClick={() => onJoin(room)}>
-                          {actionLabel}
-                        </button>
-                        {allowDelete && (
-                          <button
-                            className="room-delete-button"
-                            onClick={() => setPendingDeleteRoom(room)}
-                            aria-label={`Delete ${room.title}`}
-                            title={`Delete ${room.title}`}
-                          >
-                            <Trash2 size={17} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </article>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-      {pendingDeleteRoom && (
-        <ConfirmDeleteRoom
-          room={pendingDeleteRoom}
-          onCancel={() => setPendingDeleteRoom(null)}
-          onConfirm={() => {
-            const room = pendingDeleteRoom;
-            setPendingDeleteRoom(null);
-            void onDelete(room);
-          }}
-        />
-      )}
-    </section>
-  );
-}
-
-function TopBar({
-  code,
-  screen,
-  settingsAvailable,
-  onHome,
-  onRules,
-  onSettings
-}: {
-  code: string;
-  screen: Screen;
-  settingsAvailable: boolean;
-  onHome: () => void;
-  onRules: () => void;
-  onSettings: () => void;
-}) {
-  return (
-    <header className="topbar">
-      <button className="brand-button" onClick={onHome}>
-        <Gamepad2 size={22} />
-        <span>Property Hustle</span>
-      </button>
-      <nav className="top-actions">
-        {(screen === 'lobby' || screen === 'game') && <span className="code-chip">{code}</span>}
-        {(screen === 'lobby' || screen === 'game') && (
-          <button className="icon-button" onClick={onRules} aria-label="Game rules" title="Game rules">
-            <BookOpen size={19} />
-          </button>
-        )}
-        {screen !== 'dashboard' && (
-          <button className="icon-button" onClick={onHome} aria-label="Home">
-            <Home size={19} />
-          </button>
-        )}
-        {settingsAvailable && (
-          <button className="icon-button" onClick={onSettings} aria-label="Room settings">
-            <Settings2 size={19} />
-          </button>
-        )}
-      </nav>
-    </header>
-  );
-}
-
-function RulesGuide({ rules, onClose }: { rules: RoomRules; onClose: () => void }) {
-  const actionCards = starterDeck.filter(
-    (card, index, cards) =>
-      Boolean(card.actionKind) &&
-      cards.findIndex((candidate) => candidate.name === card.name) === index
-  );
-  const playsPerTurn = rules.playStyle === 'rush' || rules.playStyle === 'draft' ? 2 : 3;
-
-  return (
-    <div className="confirm-backdrop rules-guide-backdrop" role="dialog" aria-modal="true" aria-label="Game rules">
-      <section className="rules-guide">
-        <header className="rules-guide-header">
-          <div>
-            <div className="section-kicker">How to play</div>
-            <h2>Property Hustle rules</h2>
-          </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close rules">
-            <X size={20} />
-          </button>
-        </header>
-
-        <div className="rules-guide-scroll">
-          <div className="rules-overview">
-            <article>
-              <span>1</span>
-              <div>
-                <strong>Draw cards</strong>
-                <p>Draw 2 at the beginning of your turn. If your hand becomes empty, immediately draw 5.</p>
-              </div>
-            </article>
-            <article>
-              <span>2</span>
-              <div>
-                <strong>Play your turn</strong>
-                <p>Play or bank up to {playsPerTurn} cards under this room&apos;s {playStyleLabels[rules.playStyle]} rules.</p>
-              </div>
-            </article>
-            <article>
-              <span>3</span>
-              <div>
-                <strong>Build three sets</strong>
-                <p>Complete 3 property districts before your rivals to win the game.</p>
-              </div>
-            </article>
-          </div>
-
-          <div className="rules-detail-grid">
-            <article>
-              <h3>Properties and wildcards</h3>
-              <p>Place properties into matching colored districts. Wildcards may join a district and count toward its required size.</p>
-            </article>
-            <article>
-              <h3>Money and payments</h3>
-              <p>Money cards are stored in your bank. Payments are made from banked cards, and no change is returned.</p>
-            </article>
-            <article>
-              <h3>Actions and defense</h3>
-              <p>Actions count as plays. Just Say No can cancel an action aimed at you when the response prompt appears.</p>
-            </article>
-            <article>
-              <h3>Draw pile</h3>
-              <p>When the draw pile runs out, the discard pile is shuffled to create a fresh draw pile. Cards still in hands, banks, property districts, or active table areas stay out.</p>
-            </article>
-            <article>
-              <h3>Developments and landmarks</h3>
-              <p>Block Works may only develop a complete district. Skyline Landmark may only follow Block Works on that district. A Deal Breaker takes the complete district and both upgrades.</p>
-            </article>
-            <article>
-              <h3>Payments</h3>
-              <p>The payer chooses cards already on their table. Bank cards and properties may be used, no change is returned, and cards in hand cannot pay a debt.</p>
-            </article>
-          </div>
-
-          <div className="rules-section-heading">
-            <div className="section-kicker">Card reference</div>
-            <h3>Action and defense cards</h3>
-          </div>
-          <div className="rules-action-grid">
-            {actionCards.map((card) => (
-              <article
-                className="rules-action-card"
-                key={card.name}
-                style={{ '--accent': card.accent } as CSSProperties}
-              >
-                <span>{card.type}</span>
-                <span className="rules-card-title">
-                  <strong>{card.name}</strong>
-                </span>
-                <p>{card.text}</p>
-                <b>{card.value}M</b>
-              </article>
-            ))}
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function ModeTile({
-  icon,
-  title,
-  body,
-  onClick
-}: {
-  icon: ReactNode;
-  title: string;
-  body: string;
-  onClick: () => void;
-}) {
-  return (
-    <button className="mode-tile" onClick={onClick}>
-      <span className="tile-icon">{icon}</span>
-      <strong>{title}</strong>
-      <small>{body}</small>
-    </button>
-  );
-}
-
-function RoomComposer({
-  players,
-  bots,
-  difficulty,
-  rules,
-  onPlayers,
-  onBots,
-  onDifficulty,
-  onRules,
-  onCreate,
-  onClose,
-  editingRoom,
-  expanded = false
-}: {
-  players: number;
-  bots: number;
-  difficulty: Difficulty;
-  rules: RoomRules;
-  onPlayers: (value: number) => void;
-  onBots: (value: number) => void;
-  onDifficulty: (value: Difficulty) => void;
-  onRules: (value: RoomRules) => void;
-  onCreate: () => void;
-  onClose: () => void;
-  editingRoom: boolean;
-  expanded?: boolean;
-}) {
-  return (
-    <div className="surface composer">
-      <div className="section-kicker">Room settings</div>
-      <h2>{editingRoom ? 'Update this room' : 'Build a table'}</h2>
-
-      <div className="settings-stack">
-        <SettingRow label="Players" hint="2 min, 5 max">
-          <Stepper value={players} min={MIN_PLAYERS} max={MAX_PLAYERS} onChange={onPlayers} />
-        </SettingRow>
-
-        <SettingRow label="Bots" hint="4 max">
-          <Stepper value={bots} min={0} max={Math.min(MAX_BOTS, players - 1)} onChange={onBots} />
-        </SettingRow>
-
-        {bots > 0 && (
-          <SettingRow label="Bot difficulty" hint="Applies to bot seats">
-            <select value={difficulty} onChange={(event) => onDifficulty(event.target.value as Difficulty)}>
-              <option value="easy">Easy</option>
-              <option value="medium">Medium</option>
-              <option value="hard">Hard</option>
-            </select>
-          </SettingRow>
-        )}
-
-        <SettingRow label="Play style" hint={playStyleCopy[rules.playStyle]}>
-          <div className="segmented">
-            {(Object.keys(playStyleLabels) as PlayStyle[]).map((style) => (
-              <button
-                className={rules.playStyle === style ? 'active' : ''}
-                key={style}
-                onClick={() => onRules({ ...rules, playStyle: style })}
-              >
-                {playStyleLabels[style]}
-              </button>
-            ))}
-          </div>
-        </SettingRow>
-
-        <ToggleRow
-          label="Team defense"
-          hint="Other players may spend a block card for someone else."
-          checked={rules.allowTeamDefense}
-          onChange={() => onRules({ ...rules, allowTeamDefense: !rules.allowTeamDefense })}
-        />
-
-        <ToggleRow
-          label="Chain blocks"
-          hint="Block cards can answer other block cards."
-          checked={rules.chainBlocks}
-          onChange={() => onRules({ ...rules, chainBlocks: !rules.chainBlocks })}
-        />
-
-        {expanded && (
-          <>
-            <ToggleRow
-              label="Actions as money"
-              hint="Action cards may be banked for value."
-              checked={rules.actionCardsAsMoney}
-              onChange={() => onRules({ ...rules, actionCardsAsMoney: !rules.actionCardsAsMoney })}
-            />
-            <ToggleRow
-              label="Rent multiplier"
-              hint="Multiplier actions may stack with rent."
-              checked={rules.rentMultiplier}
-              onChange={() => onRules({ ...rules, rentMultiplier: !rules.rentMultiplier })}
-            />
-            <ToggleRow
-              label="Move wildcards"
-              hint="Wild property cards can move between districts."
-              checked={rules.wildCardsMoveFreely}
-              onChange={() => onRules({ ...rules, wildCardsMoveFreely: !rules.wildCardsMoveFreely })}
-            />
-            <SettingRow label="Turn seconds" hint="Room timer">
-              <Stepper value={rules.turnSeconds} min={30} max={180} step={15} onChange={(value) => onRules({ ...rules, turnSeconds: value })} />
-            </SettingRow>
-            <SettingRow label="Reminder sound" hint="Sweet-turn nudge">
-              <Stepper value={rules.reminderEverySeconds} min={10} max={60} step={5} onChange={(value) => onRules({ ...rules, reminderEverySeconds: value })} />
-            </SettingRow>
-            <ToggleRow
-              label="Auto skip"
-              hint="Skip when the timer expires."
-              checked={rules.autoSkip}
-              onChange={() => onRules({ ...rules, autoSkip: !rules.autoSkip })}
-            />
-          </>
-        )}
-      </div>
-
-      <div className="composer-actions">
-        <button className="primary-button" onClick={onCreate}>
-          {editingRoom ? <Settings2 size={18} /> : <QrCode size={18} />}
-          {editingRoom ? 'Update settings' : 'Create room'}
-        </button>
-        {editingRoom && (
-          <button className="ghost-button" onClick={onClose}>
-            <X size={18} />
-            Close
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SettingRow({
-  label,
-  hint,
-  children
-}: {
-  label: string;
-  hint: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="setting-row">
-      <span>
-        <strong>{label}</strong>
-        <small>{hint}</small>
-      </span>
-      {children}
-    </div>
-  );
-}
-
-function ToggleRow({
-  label,
-  hint,
-  checked,
-  onChange
-}: {
-  label: string;
-  hint: string;
-  checked: boolean;
-  onChange: () => void;
-}) {
-  return (
-    <button className="setting-row toggle-row" onClick={onChange}>
-      <span>
-        <strong>{label}</strong>
-        <small>{hint}</small>
-      </span>
-      <span className={`toggle ${checked ? 'on' : ''}`}>
-        <span />
-      </span>
-    </button>
-  );
-}
-
-function Stepper({
-  value,
-  min,
-  max,
-  step = 1,
-  onChange
-}: {
-  value: number;
-  min: number;
-  max: number;
-  step?: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div className="stepper">
-      <button type="button" onClick={() => onChange(Math.max(min, value - step))} aria-label="Decrease">
-        <Minus size={16} />
-      </button>
-      <strong>{value}</strong>
-      <button type="button" onClick={() => onChange(Math.min(max, value + step))} aria-label="Increase">
-        <Plus size={16} />
-      </button>
-    </div>
-  );
-}
-
-function RuleLine({ active, icon, label }: { active: boolean; icon: ReactNode; label: string }) {
-  return (
-    <div className={`rule-line ${active ? 'active' : ''}`}>
-      {active ? <Check size={18} /> : icon}
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function MetaPill({ icon, label }: { icon: ReactNode; label: string }) {
-  return (
-    <span className="meta-pill">
-      {icon}
-      {label}
-    </span>
-  );
-}
-
-function TablePlayerLayout({
-  players,
-  activeIndex,
-  tableCards,
-  playerRefs
-}: {
-  players: Player[];
-  activeIndex: number;
-  tableCards: TableCard[];
-  playerRefs: MutableRefObject<Map<string, HTMLElement>>;
-}) {
-  const [autoExpandedPlayerId, setAutoExpandedPlayerId] = useState<string | null>(null);
-  const [suppressedAutoPlayerId, setSuppressedAutoPlayerId] = useState<string | null>(null);
-  const [manualExpandedPlayerIds, setManualExpandedPlayerIds] = useState<string[]>([]);
-  const previousAutoPlayerIdRef = useRef<string | null>(null);
-  const opponents = players.slice(1);
-  const activeAutoPlayerId = activeIndex > 0 ? players[activeIndex]?.id ?? null : null;
-  const playerIdsKey = players.map((player) => player.id).join('|');
-
-  useEffect(() => {
-    const previousAutoPlayerId = previousAutoPlayerIdRef.current;
-
-    if (previousAutoPlayerId && previousAutoPlayerId !== activeAutoPlayerId) {
-      setManualExpandedPlayerIds((current) => current.filter((id) => id !== previousAutoPlayerId));
-    }
-
-    setAutoExpandedPlayerId(activeAutoPlayerId);
-    setSuppressedAutoPlayerId(null);
-    previousAutoPlayerIdRef.current = activeAutoPlayerId;
-  }, [activeAutoPlayerId]);
-
-  useEffect(() => {
-    const validPlayerIds = new Set(players.map((player) => player.id));
-    setManualExpandedPlayerIds((current) => current.filter((id) => validPlayerIds.has(id)));
-  }, [playerIdsKey, players]);
-
-  if (opponents.length === 0) {
-    return null;
-  }
-
-  const opponentColumns = opponents.reduce<Array<Array<{ player: Player; index: number }>>>(
-    (columns, player, index) => {
-      columns[index % 2].push({ player, index });
-      return columns;
-    },
-    [[], []]
-  ).filter((column) => column.length > 0);
-
-  return (
-    <div className={`table-player-layout opponents-${opponents.length}`}>
-      <div className="table-opponents" style={{ '--opponent-count': opponents.length } as CSSProperties}>
-        {opponentColumns.map((column, columnIndex) => (
-          <div className="table-opponent-column" key={`opponent-column-${columnIndex}`}>
-            {column.map(({ player, index }) => {
-              const isManuallyExpanded = manualExpandedPlayerIds.includes(player.id);
-              const isAutoExpanded = autoExpandedPlayerId === player.id && suppressedAutoPlayerId !== player.id;
-              const expanded = isManuallyExpanded || isAutoExpanded;
-
-              return (
-                <TablePlayerCard
-                  key={player.id}
-                  player={player}
-                  isActive={players.indexOf(player) === activeIndex}
-                  tableCards={tableCards}
-                  expanded={expanded}
-                  onToggle={() => {
-                    if (isManuallyExpanded) {
-                      setManualExpandedPlayerIds((current) => current.filter((id) => id !== player.id));
-                      return;
-                    }
-
-                    if (isAutoExpanded) {
-                      setSuppressedAutoPlayerId(player.id);
-                      return;
-                    }
-
-                    setSuppressedAutoPlayerId((current) => (current === player.id ? null : current));
-                    setManualExpandedPlayerIds((current) => (
-                      current.includes(player.id) ? current : [...current, player.id]
-                    ));
-                  }}
-                  slotIndex={index}
-                  playerRefs={playerRefs}
-                />
-              );
-            })}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function TablePlayerCard({
-  player,
-  isActive,
-  tableCards,
-  expanded,
-  onToggle,
-  slotIndex,
-  playerRefs
-}: {
-  player: Player;
-  isActive: boolean;
-  tableCards: TableCard[];
-  expanded: boolean;
-  onToggle: () => void;
-  slotIndex: number;
-  playerRefs: MutableRefObject<Map<string, HTMLElement>>;
-}) {
-  const playedCards = tableCards.filter((item) => item.owner === player.name);
-  const propertyCards = playedCards.filter((item) => item.zone === 'property');
-  const propertyCount = propertyCards.length;
-  const completedSetCount = getCompletedSetCount(tableCards, player.name);
-  const bankTotal = playedCards
-    .filter((item) => item.zone === 'bank')
-    .reduce((total, item) => total + item.card.value, 0);
-  const playedCardStacks = Array.from(
-    propertyCards.reduce((groups, item) => {
-      const groupKey = `property-${item.card.district ?? 'other'}`;
-      groups.set(groupKey, [...(groups.get(groupKey) ?? []), item]);
-      return groups;
-    }, new Map<string, TableCard[]>()).entries()
-  );
-  const districtProgress = districtSets
-    .map((district) => ({
-      ...district,
-      owned: propertyCards.filter((item) => item.card.district === district.name).length
-    }))
-    .filter((district) => district.owned > 0);
-
-  return (
-    <article
-      className={`table-player-card ${isActive ? 'active' : ''}`}
-      ref={(node) => {
-        if (node) {
-          playerRefs.current.set(player.id, node);
-        } else {
-          playerRefs.current.delete(player.id);
-        }
-      }}
-      style={{ '--slot-index': slotIndex } as CSSProperties}
-    >
-      <button
-        className="table-player-summary"
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        aria-label={`${expanded ? 'Collapse' : 'Expand'} ${player.name}'s table cards`}
-      >
-        <span className="seat-avatar">{player.isBot ? <Bot size={18} /> : <Users size={18} />}</span>
-        <span className="seat-details">
-          <strong>{player.name}</strong>
-          <small>{player.ready ? 'Ready' : 'Waiting'} - {player.cards} cards</small>
-          <span className="seat-table-summary">
-            <span>{propertyCount} properties</span>
-            <span>{completedSetCount}/3 sets</span>
-            <span>{bankTotal}M bank</span>
-          </span>
-        </span>
-        {propertyCount > 0 && (
-          <span className={`seat-card-stack ${expanded ? 'expanded' : ''}`}>
-            <span className="seat-card-miniatures">
-              {propertyCards.slice(0, 4).map((item, cardIndex) => (
-                <span
-                  className="seat-card-mini"
-                  key={`${player.id}-${item.card.id}-${cardIndex}`}
-                  style={{ '--accent': item.card.accent, '--seat-card-index': cardIndex } as CSSProperties}
-                />
-              ))}
-            </span>
-            <span>{propertyCount}</span>
-          </span>
-        )}
-      </button>
-
-      {expanded && (
-        <div className="table-player-expanded">
-          {districtProgress.length > 0 && (
-            <div className="seat-district-progress" aria-label={`${player.name}'s district progress`}>
-              {districtProgress.map((district) => (
-                <span
-                  className="seat-district-chip"
-                  key={`${player.id}-${district.name}`}
-                  style={{ '--accent': district.accent } as CSSProperties}
-                >
-                  <span>{district.name}</span>
-                  <strong>{district.owned}/{district.size}</strong>
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="table-player-stacks">
-            {playedCardStacks.map(([groupKey, stack]) => (
-              <div
-                className="seat-expanded-stack"
-                key={`${player.id}-${groupKey}`}
-                style={{ '--seat-stack-count': stack.length } as CSSProperties}
-              >
-                {stack.map((item, cardIndex) => (
-                  <div
-                    className="seat-expanded-card"
-                    key={`${player.id}-table-${item.card.id}-${item.owner}-${cardIndex}`}
-                    style={{
-                      '--accent': item.card.accent,
-                      '--seat-expanded-index': cardIndex
-                    } as CSSProperties}
-                  >
-                    <small>{item.card.type}</small>
-                    <strong>{item.card.name}</strong>
-                    <span>{item.card.value}M</span>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </article>
-  );
-}
-
-function SeatList({
-  players,
-  activeIndex,
-  compact = false,
-  tableCards = [],
-  onRemove,
-  canRemove
-}: {
-  players: Player[];
-  activeIndex: number;
-  compact?: boolean;
-  tableCards?: TableCard[];
-  onRemove?: (player: Player) => void;
-  canRemove?: (player: Player) => boolean;
-}) {
-  const [expandedPlayerId, setExpandedPlayerId] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(compact);
-
-  return (
-    <div className={`surface seat-list ${compact ? 'compact' : ''} ${collapsed ? 'collapsed' : ''}`}>
-      <div className="seat-list-heading">
-        <div>
-          <div className="section-kicker">{compact ? 'Players' : 'Seats'}</div>
-          {compact && (
-            <strong>{players[activeIndex]?.name ?? 'Player'} is playing</strong>
-          )}
-        </div>
-        {compact && (
-          <button
-            className="seat-list-toggle"
-            onClick={() => setCollapsed((current) => !current)}
-            aria-expanded={!collapsed}
-            aria-label={`${collapsed ? 'Expand' : 'Collapse'} player panel`}
-          >
-            <ChevronRight size={18} />
-            <span>{collapsed ? 'Show' : 'Hide'}</span>
-          </button>
-        )}
-      </div>
-      {!collapsed && players.map((player, index) => {
-        const playedCards = tableCards.filter((item) => item.owner === player.name);
-        const propertyCards = playedCards.filter((item) => item.zone === 'property');
-        const propertyCount = propertyCards.length;
-        const completedSetCount = getCompletedSetCount(tableCards, player.name);
-        const bankTotal = playedCards
-          .filter((item) => item.zone === 'bank')
-          .reduce((total, item) => total + item.card.value, 0);
-        const playedCardStacks = Array.from(
-          propertyCards.reduce((groups, item) => {
-            const groupKey = `property-${item.card.district ?? 'other'}`;
-            groups.set(groupKey, [...(groups.get(groupKey) ?? []), item]);
-            return groups;
-          }, new Map<string, TableCard[]>()).entries()
-        );
-        const districtProgress = districtSets
-          .map((district) => ({
-            ...district,
-            owned: propertyCards.filter((item) => item.card.district === district.name).length
-          }))
-          .filter((district) => district.owned > 0);
-        const expanded = expandedPlayerId === player.id;
-        const hasTableSummary = propertyCount > 0 || bankTotal > 0;
-
-        return (
-          <div
-            className={`seat-row ${index === activeIndex ? 'active' : ''} ${
-              onRemove && canRemove?.(player) ? 'removable' : ''
-            } ${propertyCount > 0 ? 'has-played-cards' : ''}`}
-            key={player.id}
-          >
-            <span className="seat-avatar">{player.isBot ? <Bot size={18} /> : <Users size={18} />}</span>
-            <span className="seat-details">
-              <strong>{player.name}</strong>
-              <small>{player.ready ? 'Ready' : 'Waiting'} - {player.cards} cards</small>
-              {compact && hasTableSummary && (
-                <span className="seat-table-summary">
-                  <span>{propertyCount} properties</span>
-                  <span>{completedSetCount}/3 sets</span>
-                  <span>{bankTotal}M bank</span>
-                </span>
-              )}
-            </span>
-            {compact && propertyCount > 0 && (
-              <button
-                className={`seat-card-stack ${expanded ? 'expanded' : ''}`}
-                onClick={() => setExpandedPlayerId(expanded ? null : player.id)}
-                aria-expanded={expanded}
-                aria-label={`${expanded ? 'Collapse' : 'Expand'} ${player.name}'s property cards`}
-              >
-                <span className="seat-card-miniatures">
-                  {propertyCards.slice(0, 4).map((item, cardIndex) => (
-                    <span
-                      className="seat-card-mini"
-                      key={`${player.id}-${item.card.id}-${cardIndex}`}
-                      style={{ '--accent': item.card.accent, '--seat-card-index': cardIndex } as CSSProperties}
-                    />
-                  ))}
-                </span>
-                <span>{propertyCount}</span>
-              </button>
-            )}
-            {expanded && (
-              <div className="seat-expanded-cards">
-                {districtProgress.length > 0 && (
-                  <div className="seat-district-progress" aria-label={`${player.name}'s district progress`}>
-                    {districtProgress.map((district) => (
-                      <span
-                        className="seat-district-chip"
-                        key={`${player.id}-${district.name}`}
-                        style={{ '--accent': district.accent } as CSSProperties}
-                      >
-                        <span>{district.name}</span>
-                        <strong>{district.owned}/{district.size}</strong>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {playedCardStacks.map(([groupKey, stack]) => (
-                  <div
-                    className="seat-expanded-stack"
-                    key={`${player.id}-${groupKey}`}
-                    style={{ '--seat-stack-count': stack.length } as CSSProperties}
-                  >
-                    {stack.map((item, cardIndex) => (
-                      <div
-                        className="seat-expanded-card"
-                        key={`${player.id}-expanded-${item.card.id}-${item.owner}-${cardIndex}`}
-                        style={{
-                          '--accent': item.card.accent,
-                          '--seat-expanded-index': cardIndex
-                        } as CSSProperties}
-                      >
-                        <small>{item.card.type}</small>
-                        <strong>{item.card.name}</strong>
-                        <span>{item.card.value}M</span>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
-            {onRemove && canRemove?.(player) && (
-              <button
-                className="seat-remove-button"
-                onClick={() => onRemove(player)}
-                aria-label={`Remove ${player.name}`}
-                title={`Remove ${player.name}`}
-              >
-                <Trash2 size={16} />
-              </button>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function FlyingCard({ flight }: { flight: CardFlight }) {
-  const style = getCardStyle(flight.card, {
-    left: flight.from.left,
-    top: flight.from.top,
-    width: flight.from.width,
-    height: flight.from.height,
-    animationDelay: `${flight.delay}ms`,
-    '--fly-x': `${flight.x}px`,
-    '--fly-y': `${flight.y}px`,
-    '--fly-mid-x': `${flight.x * 0.48}px`,
-    '--fly-mid-y': `${flight.y * 0.42 - 32}px`
-  } as CSSProperties);
-
-  return (
-    <div
-      className={`flying-card ${getWildcardBand(flight.card) ? 'wild-choice' : ''} ${flight.faceDown ? 'face-down' : ''}`}
-      style={style}
-      aria-hidden="true"
-    >
-      {flight.faceDown ? (
-        <div className="card-back-mark">
-          <Gamepad2 size={24} />
-          <span>Property Hustle</span>
-        </div>
-      ) : (
-        <>
-          <span>{flight.card.type}</span>
-          <strong>{flight.card.name}</strong>
-          <small>{flight.card.text}</small>
-          <b>{flight.card.value}M</b>
-        </>
-      )}
-    </div>
-  );
-}
-
-function TableZonePanel({
-  zoneRef,
-  title,
-  cards,
-  empty
-}: {
-  zoneRef?: RefObject<HTMLDivElement | null>;
-  title: string;
-  cards: TableCard[];
-  empty: string;
-}) {
-  const ownerGroups = Array.from(new Set(cards.map((item) => item.owner))).map((owner) => {
-    const ownerCards = cards.filter((item) => item.owner === owner);
-    const stacks = Array.from(
-      new Set(
-        ownerCards.map((item) =>
-          item.zone === 'property'
-            ? item.card.district ?? 'Properties'
-            : item.zone === 'bank'
-              ? 'Bank'
-              : 'Actions'
-        )
-      )
-    ).map((label) => ({
-      label,
-      cards: ownerCards.filter((item) => {
-        const itemLabel =
-          item.zone === 'property'
-            ? item.card.district ?? 'Properties'
-            : item.zone === 'bank'
-              ? 'Bank'
-              : 'Actions';
-        return itemLabel === label;
-      })
-    }));
-
-    return { owner, stacks };
-  });
-
-  return (
-    <div className="zone-panel" ref={zoneRef}>
-      <div className="zone-title">
-        <span>{title}</span>
-        {cards.length > 0 && <span className="zone-card-count">{cards.length}</span>}
-      </div>
-      {cards.length === 0 ? (
-        <p className="empty-zone">{empty}</p>
-      ) : (
-        <div className="player-board-grid">
-          {ownerGroups.map((group) => (
-            <section className="player-board" key={`${title}-${group.owner}`}>
-              <header>
-                <strong>{group.owner}</strong>
-                <span>{group.stacks.reduce((total, stack) => total + stack.cards.length, 0)} cards</span>
-              </header>
-              <div className="player-board-stacks">
-                {group.stacks.map((stack) => (
-                  <div className="solitaire-column" key={`${group.owner}-${stack.label}`}>
-                    <span className="solitaire-label">{stack.label}</span>
-                    <div
-                      className="solitaire-stack"
-                      style={{ '--stack-size': stack.cards.length } as CSSProperties}
-                    >
-                      {stack.cards.map((item, index) => (
-                        <article
-                          className="mini-card"
-                          key={`${group.owner}-${stack.label}-${item.card.id}-${index}`}
-                          style={{ '--accent': item.card.accent, '--stack-index': index } as CSSProperties}
-                        >
-                          <span>{item.card.type}</span>
-                          {item.zone === 'property' && item.playedAs === 'property' && item.card.setSize && (
-                            <span
-                              className="card-set-progress"
-                              title={`${stack.cards.filter((card) => card.playedAs === 'property').length} of ${item.card.setSize} played`}
-                            >
-                              {stack.cards.filter((card) => card.playedAs === 'property').length}/{item.card.setSize}
-                            </span>
-                          )}
-                          <strong>{item.card.name}</strong>
-                          <small>{item.card.value}M</small>
-                        </article>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TableMiniSummary({
-  icon,
-  label,
-  cards,
-  total,
-  collapsed,
-  onToggle
-}: {
-  icon: ReactNode;
-  label: string;
-  cards: TableCard[];
-  total: string;
-  collapsed: boolean;
-  onToggle: () => void;
-}) {
-  const cardGroups =
-    label === 'Board'
-      ? Array.from(new Set(cards.map((item) => item.card.district ?? 'Properties'))).map(
-          (district) => ({
-            label: district,
-            cards: cards.filter((item) => (item.card.district ?? 'Properties') === district)
-          })
-        )
-      : cards.map((item) => ({ label: item.card.name, cards: [item] }));
-
-  return (
-    <div className={`table-mini-summary ${collapsed ? 'collapsed' : ''}`}>
-      <div className="table-mini-heading">
-        {icon}
-        <span>{label}</span>
-        <strong>{total}</strong>
-        <button
-          className="mini-summary-toggle"
-          type="button"
-          onClick={onToggle}
-          aria-expanded={!collapsed}
-          aria-label={`${collapsed ? 'Show' : 'Hide'} ${label.toLowerCase()} cards`}
-        >
-          <ChevronRight size={14} />
-        </button>
-      </div>
-      {!collapsed && <div className="table-mini-cards">
-        {cards.length === 0 ? (
-          <span className="table-mini-empty">No cards</span>
-        ) : (
-          <>
-            {cardGroups.map((group, groupIndex) => (
-              <div className="table-mini-set" key={`${label}-${group.label}-${groupIndex}`}>
-                {group.cards.map((item, index) => (
-                  <div
-                    className="table-mini-card"
-                    key={`${label}-${group.label}-${item.owner}-${item.card.id}-${index}`}
-                    style={{ '--accent': item.card.accent, '--mini-stack-index': index } as CSSProperties}
-                    title={`${item.card.name} - ${item.card.value}M`}
-                  >
-                    <small>{item.card.type}</small>
-                    <b>{item.card.name}</b>
-                    <em>{item.card.value}M</em>
-                  </div>
-                ))}
-                {label === 'Board' && group.cards.length > 1 && (
-                  <span className="table-mini-set-count">{group.cards.length}</span>
-                )}
-              </div>
-            ))}
-            {cardGroups.length > 4 && (
-              <span className="table-mini-more" title={`${cardGroups.length - 4} more stacks`}>
-                +{cardGroups.length - 4}
-              </span>
-            )}
-          </>
-        )}
-      </div>}
-    </div>
-  );
-}
-
-function ScannerPanel({
-  onClose,
-  onJoin
-}: {
-  onClose: () => void;
-  onJoin: (value: string) => void;
-}) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [scanValue, setScanValue] = useState('');
-  const [cameraState, setCameraState] = useState<'requesting' | 'live' | 'detected' | 'blocked' | 'unsupported'>('requesting');
-  const [cameraMessage, setCameraMessage] = useState('Requesting camera access...');
-
-  useEffect(() => {
-    let stream: MediaStream | null = null;
-    let frame = 0;
-    let cancelled = false;
-
-    const stopCamera = () => {
-      if (frame) cancelAnimationFrame(frame);
-      stream?.getTracks().forEach((track) => track.stop());
-    };
-
-    const startCamera = async () => {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setCameraState('unsupported');
-        setCameraMessage('Camera scanning is not supported in this browser. Type the code below.');
-        return;
-      }
-
-      try {
-        setCameraState('requesting');
-        setCameraMessage('Requesting camera access...');
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-          audio: false
-        });
-
-        if (cancelled) {
-          stopCamera();
-          return;
-        }
-
-        const video = videoRef.current;
-        if (video) {
-          video.srcObject = stream;
-          await video.play();
-        }
-
-        setCameraState('live');
-        setCameraMessage('Camera is live. Hold a room QR in view.');
-
-        const Detector = (window as Window & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector;
-        if (!Detector) {
-          setCameraMessage('Camera is live. QR auto-detect is not available here, so type the code if needed.');
-          return;
-        }
-
-        const detector = new Detector({ formats: ['qr_code'] });
-        const scanFrame = async () => {
-          if (cancelled) return;
-
-          const liveVideo = videoRef.current;
-          if (liveVideo && liveVideo.readyState >= 2) {
-            try {
-              const results = await detector.detect(liveVideo);
-              const rawValue = results[0]?.rawValue;
-              if (rawValue) {
-                setScanValue(rawValue);
-                setCameraState('detected');
-                setCameraMessage('QR detected. Use the scanned code to join.');
-                return;
-              }
-            } catch {
-              setCameraMessage('Camera is live. Type the code if QR detection does not lock on.');
-            }
-          }
-
-          frame = requestAnimationFrame(scanFrame);
-        };
-
-        frame = requestAnimationFrame(scanFrame);
-      } catch {
-        setCameraState('blocked');
-        setCameraMessage('Camera permission was blocked or unavailable. Type the code below.');
-      }
-    };
-
-    void startCamera();
-
-    return () => {
-      cancelled = true;
-      stopCamera();
-    };
-  }, []);
-
-  return (
-    <div className="scanner-backdrop" role="dialog" aria-modal="true" aria-label="QR scanner">
-      <div className="scanner-sheet">
-        <button className="scanner-close" onClick={onClose} aria-label="Close scanner">
-          <X size={18} />
-        </button>
-        <div className="section-kicker">QR scanner</div>
-        <div className={`scanner-frame ${cameraState === 'live' || cameraState === 'detected' ? 'camera-live' : ''}`}>
-          <video ref={videoRef} autoPlay muted playsInline aria-label="Camera preview" />
-          <div className="scanner-target">
-            {cameraState === 'blocked' || cameraState === 'unsupported' ? <X size={42} /> : <ScanLine size={46} />}
-            <span>{cameraState === 'detected' ? 'QR detected' : 'Point at room QR'}</span>
-          </div>
-        </div>
-        <p className="scanner-status">{cameraMessage}</p>
-        <label className="text-field">
-          <span>Code or secret key</span>
-          <input
-            value={scanValue}
-            onChange={(event) => setScanValue(event.target.value)}
-            placeholder="ROOM42 or HOST-0000-KEYS"
-          />
-        </label>
-        <button className="primary-button wide" onClick={() => onJoin(scanValue)}>
-          <ScanLine size={18} />
-          Use scanned code
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ConfirmDiscardSettings({
-  onCancel,
-  onConfirm
-}: {
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Discard room settings">
-      <div className="confirm-sheet">
-        <div className="section-kicker">Unsaved settings</div>
-        <h2>Discard changes?</h2>
-        <p>
-          You changed this room&apos;s settings but have not updated the room yet. Closing now will
-          lose those edits.
-        </p>
-        <div className="confirm-actions">
-          <button className="ghost-button" onClick={onCancel}>
-            Keep editing
-          </button>
-          <button className="danger-button" onClick={onConfirm}>
-            <X size={18} />
-            Discard changes
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ConfirmDeleteRoom({
-  room,
-  onCancel,
-  onConfirm
-}: {
-  room: ActiveRoom;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onCancel();
-        return;
-      }
-
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        onConfirm();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onCancel, onConfirm]);
-
-  return (
-    <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="Delete room confirmation">
-      <div className="confirm-sheet">
-        <div className="section-kicker">Local maintenance</div>
-        <h2>Delete {room.code}?</h2>
-        <p>
-          This removes <strong>{room.title}</strong> from the local room list. Other devices will no
-          longer be able to join a registered room after it is deleted.
-        </p>
-        <div className="confirm-actions">
-          <button className="ghost-button" onClick={onCancel}>
-            Keep room
-          </button>
-          <button className="danger-button" onClick={onConfirm}>
-            <Trash2 size={18} />
-            Delete room
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ConfirmEndTurn({
-  remainingPlays,
-  onCancel,
-  onConfirm
-}: {
-  remainingPlays: number;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-label="End turn confirmation">
-      <div className="confirm-sheet">
-        <div className="section-kicker">End turn</div>
-        <h2>Pass with plays left?</h2>
-        <p>
-          You still have {remainingPlays} play{remainingPlays === 1 ? '' : 's'} available this turn.
-        </p>
-        <div className="confirm-actions">
-          <button className="ghost-button" onClick={onCancel}>
-            Keep playing
-          </button>
-          <button className="primary-button" onClick={onConfirm}>
-            <RotateCcw size={18} />
-            End turn
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TurnToast({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
-  const [drag, setDrag] = useState({ active: false, startX: 0, startY: 0, x: 0, y: 0 });
-  const [exiting, setExiting] = useState(false);
-  const dismissRef = useRef(onDismiss);
-
-  useEffect(() => {
-    dismissRef.current = onDismiss;
-  }, [onDismiss]);
-
-  const resetDrag = () => setDrag({ active: false, startX: 0, startY: 0, x: 0, y: 0 });
-  const dismiss = useCallback(() => {
-    if (exiting) return;
-    setExiting(true);
-    window.setTimeout(() => dismissRef.current(), 260);
-  }, [exiting]);
-
-  useEffect(() => {
-    let dismissTimeout: number | undefined;
-    const timeout = window.setTimeout(() => {
-      setExiting(true);
-      dismissTimeout = window.setTimeout(() => dismissRef.current(), 260);
-    }, 6000);
-
-    return () => {
-      window.clearTimeout(timeout);
-      if (dismissTimeout) window.clearTimeout(dismissTimeout);
-    };
-  }, [toast.id]);
-
-  return (
-    <div
-      className={`turn-toast ${exiting ? 'is-exiting' : ''}`}
-      data-dragging={drag.active ? 'true' : 'false'}
-      onDoubleClick={dismiss}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return;
-        event.currentTarget.setPointerCapture(event.pointerId);
-        setDrag({ active: true, startX: event.clientX, startY: event.clientY, x: 0, y: 0 });
-      }}
-      onPointerMove={(event) => {
-        if (!drag.active) return;
-        setDrag((current) => ({
-          ...current,
-          x: event.clientX - current.startX,
-          y: event.clientY - current.startY
-        }));
-      }}
-      onPointerUp={() => {
-        if (Math.abs(drag.x) > 120 || Math.abs(drag.y) > 90) {
-          dismiss();
-          return;
-        }
-        resetDrag();
-      }}
-      style={{ transform: `translate(${drag.x}px, ${drag.y}px)` }}
-      role="status"
-    >
-      <button
-        onClick={(event) => {
-          event.stopPropagation();
-          dismiss();
-        }}
-        onPointerDown={(event) => event.stopPropagation()}
-        aria-label="Dismiss notification"
-      >
-        <X size={16} />
-      </button>
-      <strong>{toast.title}</strong>
-      <p>{toast.body}</p>
-    </div>
   );
 }
